@@ -247,20 +247,25 @@ fn emit_fib_prove(out: &str) {
     let mut proof_json = serde_json::to_value(&proof).unwrap();
 
     // The proof is generated and verified under Pico's real 84-query config,
-    // but only the first STORED_QUERY_PROOFS query proofs are committed: the
-    // pre-query transcript (roots, challenges, final poly, PoW witness)
-    // already pins every earlier byte, and 84 full Merkle path sets would be
-    // ~17k lines of fixture. The consumer must still prove with all 84
-    // queries; it just compares the stored prefix.
-    const STORED_QUERY_PROOFS: usize = 4;
-    let stored: Vec<Value> = proof_json["opening_proof"]["query_proofs"]
+    // but only checkpoint query proofs are committed: the pre-query
+    // transcript (roots, challenges, final poly, PoW witness) already pins
+    // every earlier byte, and 84 full Merkle path sets would be ~17k lines
+    // of fixture. The last query is a checkpoint on purpose — it pins the
+    // tail of the index-sampling stream, which a first-only prefix would
+    // miss. The consumer must still prove with all 84 queries and compares
+    // the stored checkpoints by position.
+    let all_queries = proof_json["opening_proof"]["query_proofs"]
         .as_array()
         .unwrap()
+        .clone();
+    let checkpoints = [0usize, 1, 2, all_queries.len() - 1];
+    let stored: Vec<Value> = checkpoints
         .iter()
-        .take(STORED_QUERY_PROOFS)
-        .cloned()
+        .map(|&i| all_queries[i].clone())
         .collect();
     proof_json["opening_proof"]["query_proofs"] = Value::Array(stored);
+    proof_json["opening_proof"]["stored_query_indices"] =
+        serde_json::to_value(checkpoints).unwrap();
 
     // Re-derive the pre-opening challenges the way the verifier does, so the
     // Python pipeline can byte-match alpha/zeta without parsing FRI first.

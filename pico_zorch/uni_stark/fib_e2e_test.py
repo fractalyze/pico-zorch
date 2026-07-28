@@ -100,15 +100,16 @@ class FibE2eTest(absltest.TestCase):
 
     def test_query_openings(self) -> None:
         proof = self.result.reduction_proof
-        # The golden stores only a prefix of the 84 query proofs (the
-        # pre-query transcript pins everything earlier); the prover must
+        # The golden stores checkpoint query proofs (first few + the last,
+        # which pins the tail of the index-sampling stream); the prover must
         # still have produced all of them.
-        want_queries = self.golden["proof"]["opening_proof"]["query_proofs"]
+        opening_proof = self.golden["proof"]["opening_proof"]
+        want_queries = opening_proof["query_proofs"]
+        stored_indices = opening_proof["stored_query_indices"]
         self.assertEqual(
             len(proof.fri.input_openings), self.golden["fri_config"]["num_queries"]
         )
-        self.assertLessEqual(len(want_queries), len(proof.fri.input_openings))
-        for q, want_q in enumerate(want_queries):
+        for q, want_q in zip(stored_indices, want_queries):
             got_rounds = proof.fri.input_openings[q]
             want_rounds = want_q["input_proof"]
             for r, (got, want_r) in enumerate(zip(got_rounds, want_rounds)):
