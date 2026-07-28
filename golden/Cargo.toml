@@ -26,5 +26,21 @@ p3-poseidon2 = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7
 p3-symmetric = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }
 p3-uni-stark = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }
 p3-util = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }
+p3-maybe-rayon = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }
 serde = "1"
 serde_json = "1"
+
+# The fixture generator MUST build without this: the reference grind is
+# `find_any` over a rayon iterator, so parallelism makes which witness it
+# finds non-reproducible. The reference-bench binary enables it to time the
+# prover the way Pico ships it (its own default features include rayon).
+[features]
+parallel = ["p3-maybe-rayon/parallel"]
+
+[[bin]]
+name = "pico-zorch-golden"
+path = "src/main.rs"
+
+[[bin]]
+name = "reference-bench"
+path = "src/bench.rs"

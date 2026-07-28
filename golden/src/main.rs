@@ -15,73 +15,24 @@
 //!
 //! Field elements are serialized as canonical u32 (KoalaBear fits JSON
 //! numbers exactly); extension elements as [c0, c1, c2, c3].
-
-mod fib_air;
-mod rc;
-
 use std::fs;
 use std::path::Path;
 
 use p3_challenger::{
-    CanObserve, CanSample, CanSampleBits, DuplexChallenger, FieldChallenger, GrindingChallenger,
+    CanObserve, CanSample, CanSampleBits, FieldChallenger, GrindingChallenger,
 };
-use p3_commit::{ExtensionMmcs, Pcs};
-use p3_dft::Radix2DitParallel;
-use p3_field::extension::BinomialExtensionField;
+use p3_commit::Pcs;
 use p3_field::{Field, FieldAlgebra, FieldExtensionAlgebra, PrimeField32, TwoAdicField};
-use p3_fri::{FriConfig, TwoAdicFriPcs};
-use p3_koala_bear::{KoalaBear, Poseidon2KoalaBear};
 use p3_matrix::Matrix;
-use p3_merkle_tree::MerkleTreeMmcs;
-use p3_poseidon2::ExternalLayerConstants;
-use p3_symmetric::{PaddingFreeSponge, Permutation, TruncatedPermutation};
-use p3_uni_stark::{prove, verify, StarkConfig};
+use p3_symmetric::Permutation;
+use p3_uni_stark::{prove, verify};
 use serde_json::{json, Value};
 
-use fib_air::{generate_trace_rows, FibonacciAir};
-use rc::RC_16_30_U32;
-
-type Val = KoalaBear;
-type Perm = Poseidon2KoalaBear<16>;
-type MyHash = PaddingFreeSponge<Perm, 16, 8, 8>;
-type MyCompress = TruncatedPermutation<Perm, 2, 8, 16>;
-type ValMmcs =
-    MerkleTreeMmcs<<Val as Field>::Packing, <Val as Field>::Packing, MyHash, MyCompress, 8>;
-type Challenge = BinomialExtensionField<Val, 4>;
-type ChallengeMmcs = ExtensionMmcs<Val, Challenge, ValMmcs>;
-type Challenger = DuplexChallenger<Val, Perm, 16, 8>;
-type Dft = Radix2DitParallel<Val>;
-type MyPcs = TwoAdicFriPcs<Val, Dft, ValMmcs, ChallengeMmcs>;
-type MyConfig = StarkConfig<MyPcs, Challenge, Challenger>;
-
-/// Pico's FRI parameters for the RISCV phase:
-/// KoalaBearPoseidon2::new() in vm/src/configs/stark_config/kb_poseidon2.rs.
-const LOG_BLOWUP: usize = 1;
-const NUM_QUERIES: usize = 84;
-const POW_BITS: usize = 16;
-
-/// pico_poseidon2kb_init() from pico v2.0.0 vm/src/primitives/mod.rs:
-/// RC_16_30 rows 0..4 initial external, rows 4..24 column 0 internal,
-/// rows 24..28 terminal external (rows 28..30 unused), each element reduced
-/// with from_wrapped_u32.
-fn pico_perm() -> Perm {
-    const ROUNDS_F: usize = 8;
-    const ROUNDS_P: usize = 20;
-
-    let rc: Vec<[Val; 16]> = RC_16_30_U32
-        .iter()
-        .map(|row| row.map(Val::from_wrapped_u32))
-        .collect();
-    let internal: Vec<Val> = rc[(ROUNDS_F / 2)..(ROUNDS_F / 2 + ROUNDS_P)]
-        .iter()
-        .map(|row| row[0])
-        .collect();
-    let external = ExternalLayerConstants::new(
-        rc[..(ROUNDS_F / 2)].to_vec(),
-        rc[(ROUNDS_F / 2 + ROUNDS_P)..(ROUNDS_F + ROUNDS_P)].to_vec(),
-    );
-    Perm::new(external, internal)
-}
+use pico_zorch_golden::rc::RC_16_30_U32;
+use pico_zorch_golden::{
+    config, fib_trace, pcs, pico_perm, Challenge, Challenger, Dft, FibonacciAir, MyPcs, Val,
+    LOG_BLOWUP, NUM_QUERIES, POW_BITS,
+};
 
 fn ser_f(x: Val) -> Value {
     json!(x.as_canonical_u32())
@@ -181,25 +132,11 @@ fn emit_challenger(out: &str) {
     write_json(out, &json!({ "steps": steps }));
 }
 
-fn pcs() -> MyPcs {
-    let perm = pico_perm();
-    let hash = MyHash::new(perm.clone());
-    let compress = MyCompress::new(perm.clone());
-    let val_mmcs = ValMmcs::new(hash, compress);
-    let fri_config = FriConfig {
-        log_blowup: LOG_BLOWUP,
-        num_queries: NUM_QUERIES,
-        proof_of_work_bits: POW_BITS,
-        mmcs: ChallengeMmcs::new(val_mmcs.clone()),
-    };
-    MyPcs::new(Dft::default(), val_mmcs, fri_config)
-}
-
 /// TwoAdicFriPcs trace commit: shift-3 coset LDE, bit-reversed rows, Merkle
 /// root. The LDE matrix itself is dumped so the Python side can pin the LDE
 /// and the tree independently.
 fn emit_trace_commit(out: &str) {
-    let trace = generate_trace_rows::<Val>(0, 1, 8);
+    let (trace, _) = fib_trace(2, 8);
     let p = pcs();
     let domain =
         <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&p, trace.height());
@@ -228,21 +165,16 @@ fn emit_trace_commit(out: &str) {
 /// challenges a verifier derives up to the PCS opening — enough to byte-match
 /// each pipeline stage before the proof as a whole.
 fn emit_fib_prove(out: &str) {
-    let n = 8usize;
-    let trace = generate_trace_rows::<Val>(0, 1, n);
-    let pis = vec![
-        Val::from_canonical_u64(0),
-        Val::from_canonical_u64(1),
-        Val::from_canonical_u64(21),
-    ];
+    let (trace, last) = fib_trace(2, 8);
+    let pis = vec![Val::ZERO, Val::ONE, last];
 
-    let config = MyConfig::new(pcs());
+    let config = config();
     let mut challenger = Challenger::new(pico_perm());
-    let proof = prove(&config, &FibonacciAir {}, &mut challenger, trace.clone(), &pis);
+    let air = FibonacciAir { width: 2 };
+    let proof = prove(&config, &air, &mut challenger, trace.clone(), &pis);
 
     let mut challenger = Challenger::new(pico_perm());
-    verify(&config, &FibonacciAir {}, &mut challenger, &proof, &pis)
-        .expect("golden proof must verify");
+    verify(&config, &air, &mut challenger, &proof, &pis).expect("golden proof must verify");
 
     let mut proof_json = serde_json::to_value(&proof).unwrap();
 
@@ -310,6 +242,11 @@ fn main() {
     assert!(
         std::env::var("FRI_QUERIES").is_err(),
         "FRI_QUERIES would silently change the reference num_queries"
+    );
+    assert!(
+        !cfg!(feature = "parallel"),
+        "the `parallel` feature makes the reference grind's find_any pick an \
+         arbitrary witness, so fixtures written under it are not reproducible"
     );
 
     emit_poseidon2(&format!(

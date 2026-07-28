@@ -116,13 +116,34 @@ here satisfies that against Pico's machine prover: its RISCV shard has a
 multi-chip outer transcript this repo does not implement, so ratios against
 Pico's published block-proving numbers are scope-confounded.
 
-Pico's open repo also has no GPU code — v2.0.0 proves on rayon, and the
-vendored Plonky3 fork's `gpu` feature only disables SIMD for interop with
-the closed CUDA prover. That prover ships as Docker images on
-`pico-proofs.s3.us-west-2.amazonaws.com` (aggregator / subblock-worker plus
-block-input dumps): runnable and timeable on local hardware for a
-machine-level baseline, opaque below the proof level. The open reference is
-therefore CPU — the [`golden/`](../golden/) harness proves the identical
-Fibonacci instance through the fork's `p3_uni_stark::prove`, and its serial
-build (the grind-determinism tradeoff) makes a rayon build the fairer
-open-CPU comparison at scale.
+Pico's closed prover cannot be compared to this one at all: its GPU path
+never calls `p3_uni_stark::prove` — `vm/src/machine/prover.rs` runs a
+multi-chip protocol with permutation traces, per-chip sums and a four-round
+batched opening. Comparing against it means implementing that machine
+prover here and proving the same block-input dump, which its Docker images
+(`pico-proofs.s3.us-west-2.amazonaws.com`) consume; they are runnable and
+timeable, but opaque below the proof level.
+
+What *is* directly comparable is the reference CPU prover on the identical
+instance, which `golden/`'s second binary times:
+
+```sh
+cd golden && cargo run --release --bin reference-bench --features parallel -- 20 32 5
+```
+
+Same AIR, trace shape, FRI config and field as `bench_prove`, and it
+verifies its own proof before reporting. `--features parallel` matters: the
+fixture generator must build without it (the grind's `find_any` is only
+reproducible when serial), but Pico's own defaults include rayon, so a
+serial build would understate the reference.
+
+| degree_bits × width | reference CPU, 24 threads | pico-zorch, one RTX 5090 |
+|---|---|---|
+| 2^16 × 32 | 89 ms | 7.1 ms |
+| 2^20 × 32 | 1220 ms | 21.4 ms |
+
+Read that as a platform comparison, not an implementation verdict: the two
+run the same protocol over the same instance, but a 24-core CPU and a 5090
+are not the same budget. The scaling is the load-bearing part — the gap
+widens with trace height, which is what one expects when the GPU's
+parallelism has more to bite on and fixed overheads amortize.
