@@ -34,6 +34,7 @@ py_library(
     deps = [
         ":air",
         ":domain",
+        "@zorch//zorch/pcs:fold",
         "@zorch//zorch/poly",
         requirement("frx"),
         requirement("numpy"),
@@ -71,7 +72,7 @@ py_library(
         "@zorch//zorch:transcript",
         "@zorch//zorch/coding:reed_solomon",
         "@zorch//zorch/commit:merkle",
-        "@zorch//zorch/pcs:deep",
+        "@zorch//zorch/pcs:fold",
         "@zorch//zorch/poly",
         requirement("frx"),
         requirement("numpy"),

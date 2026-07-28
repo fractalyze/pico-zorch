@@ -2,9 +2,14 @@
 """Quotient polynomial evaluation, mirroring the reference `quotient_values`
 (Plonky3 uni-stark/src/prover.rs at brevis-network/Plonky3@7fbe1908).
 
-quotient(X) = Σ_j α^{C-1-j}·c_j(X) / Z_H(X) over the quotient coset, natural
-order. The α powers run high-to-low because the reference reverses them while
-its folder walks constraints first-to-last, which is why an AIR's emission
+quotient(X) = Σ_j α^{C-1-j}·c_j(X) / Z_H(X), evaluated pointwise over the
+quotient coset in natural order. Working in evaluations rather than
+coefficients is what makes this linear-time: Z_H is a fixed cheap function
+on a coset disjoint from the trace domain, so the division is one field
+multiply per point by a precomputed inverse.
+
+The α powers run high-to-low because the reference reverses them while its
+folder walks constraints first-to-last, which is why an AIR's emission
 order is part of the byte contract (`air.Air`).
 """
 
@@ -12,10 +17,10 @@ from __future__ import annotations
 
 import frx.numpy as fnp
 import numpy as np
-from frx import Array, lax
-from zk_dtypes import koalabear_mont as F
+from frx import Array
 from zk_dtypes import koalabearx4_mont as EF
 
+from zorch.pcs.fold import to_base_field
 from zorch.poly.univariate import powers
 
 from pico_zorch.uni_stark.air import Air
@@ -23,7 +28,11 @@ from pico_zorch.uni_stark.domain import Coset
 
 
 def log_quotient_degree(constraint_degree: int) -> int:
-    """ceil(log2(constraint_degree − 1)) — the reference's quotient blowup."""
+    """ceil(log2(constraint_degree − 1)) — the reference's quotient blowup.
+
+    A degree-d constraint over a degree-(n−1) trace has degree ~d·n, so
+    dividing by Z_H (degree n) leaves Q of degree ~(d−1)·n: it needs d−1
+    chunks of trace degree, rounded up to a power of two."""
     return (max(constraint_degree - 1, 1) - 1).bit_length()
 
 
@@ -69,6 +78,7 @@ def quotient_values(
 
 
 def flatten_to_base(quotient: Array) -> Array:
-    """`[n]` extension evaluations -> `[n, 4]` base columns, limb order
-    c0..c3 — the reference's `flatten_to_base`."""
-    return lax.bitcast_convert_type(quotient, F)
+    """`[n]` extension evaluations -> `[n, 4]` base columns — the reference's
+    `flatten_to_base`. The column axis is added first because zorch folds
+    limbs into an existing trailing axis."""
+    return to_base_field(quotient[:, None])

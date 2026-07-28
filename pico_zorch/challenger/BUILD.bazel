@@ -13,6 +13,7 @@ py_library(
     deps = [
         "//pico_zorch",
         "//pico_zorch/poseidon2:koalabear",
+        "@zorch//zorch:challenge",
         "@zorch//zorch:transcript",
         "@zorch//zorch/hash/poseidon2",
         requirement("frx"),

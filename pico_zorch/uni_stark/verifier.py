@@ -1,12 +1,17 @@
 # Copyright 2026 The pico-zorch Authors. SPDX-License-Identifier: Apache-2.0
 """The uni-stark composite verifier — the prover's explicit dual.
 
-Replays the same chain (quotient stage, then FRI opening), ANDing each
-stage's verdict, and closes with the out-of-domain identity
-folded_constraints(ζ)/Z_H(ζ) == quotient(ζ). That check lives here, not in
-a stage, because the composite is the first place the opened values and the
-AIR meet. Algebraic failure lands in `VerifyResult.ok`; a structurally
-impossible proof raises instead, since no challenge can rescue it.
+Replays the same chain, ANDing each stage's verdict, and closes the argument
+with the STARK identity at ζ: the α-folded constraints, evaluated on the
+opened trace values, must equal Q(ζ)·Z_H(ζ). The opening stage has already
+established that those values are the honest evaluations of committed
+low-degree polynomials, so this last equation is what turns them back into
+a statement about the AIR.
+
+The check lives here rather than in a stage because it is the first point
+where the opened values and the AIR meet. Algebraic failure lands in
+`VerifyResult.ok`; a structurally impossible proof raises instead, since no
+challenge can rescue it.
 """
 
 from __future__ import annotations
@@ -48,9 +53,12 @@ def _ext_monomial(e: int) -> Array:
 def _ood_identity(
     claim: StarkClaim, opening: TraceOpeningClaim, proof: StarkProof
 ) -> Array:
-    """The α-folded constraints at ζ, divided by Z_H, must equal the chunk
-    recombination — each chunk weighted by the other chunk domains'
-    vanishing polynomials, normalized at its own first point."""
+    """The α-folded constraints at ζ, divided by Z_H, must equal Q(ζ).
+
+    Q was committed as `quotient_degree` chunks living on disjoint cosets,
+    so recovering Q(ζ) is a Lagrange interpolation across those cosets:
+    each chunk is weighted by the other cosets' vanishing polynomials at ζ,
+    normalized at its own first point so the weights are 1 on its coset."""
     air = claim.air
     log_qd = log_quotient_degree(air.constraint_degree)
     quotient_degree = 1 << log_qd

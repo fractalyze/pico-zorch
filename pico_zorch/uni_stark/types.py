@@ -1,12 +1,19 @@
 # Copyright 2026 The pico-zorch Authors. SPDX-License-Identifier: Apache-2.0
 """Claims, witnesses and proof wire types for the uni-stark stages.
 
-The claim chain mirrors the reference protocol's two reductions:
-`QuotientClaim` (the AIR holds on the committed trace) reduces to
-`TraceOpeningClaim` (the committed polynomials open to consistent values at
-ζ and ζ·g), which the FRI opening reduces to `TrivialClaim`. Reduced claims
-are execution values, never serialized; field arrays carry raw Montgomery
-u32, canonical form appears only on comparison surfaces.
+The chain is the standard STARK reduction, each link trading a statement
+about *all* of a domain for one about a single random point:
+
+  an execution satisfies the AIR
+    → a quotient polynomial exists (constraints vanish on the trace domain)
+    → committed polynomials evaluate consistently at a random ζ
+    → those evaluations are backed by genuinely low-degree functions
+
+Only the last link needs cryptography; the first two are Schwartz-Zippel,
+which is why a cheating prover has to be committed to its trace *before* the
+challenges are drawn. Reduced claims are execution values the verifier
+re-derives, never serialized; field arrays carry raw Montgomery u32, with
+canonical form appearing only on comparison and wire surfaces.
 """
 
 from __future__ import annotations
@@ -25,7 +32,12 @@ from pico_zorch.uni_stark.domain import Coset
 
 @dataclass(frozen=True)
 class FriParams:
-    """Pico's FRI knobs (KoalaBearPoseidon2::new(): 1 / 84 / 16)."""
+    """Pico's FRI knobs (KoalaBearPoseidon2::new(): 1 / 84 / 16).
+
+    These are the security budget: each query catches a codeword that is
+    far from low-degree with probability ~1 − 2^-log_blowup, and grinding
+    buys bits outright, so conjectured soundness is
+    log_blowup·num_queries + proof_of_work_bits — 100 bits as configured."""
 
     log_blowup: int = 1
     num_queries: int = 84
@@ -34,8 +46,9 @@ class FriParams:
 
 @dataclass(frozen=True)
 class StarkClaim:
-    """The statement: this AIR holds on some height-2^degree_bits trace with
-    these public values."""
+    """The NP statement: some height-2^degree_bits execution trace satisfies
+    every AIR constraint and is consistent with these public values. The
+    trace itself is the witness, and stays private."""
 
     air: Air
     public_values: Array
@@ -44,15 +57,18 @@ class StarkClaim:
 
 @dataclass(frozen=True)
 class StarkWitness:
-    """The `[2^degree_bits, width]` main trace, natural row order."""
+    """The witness: the execution trace, one row per cycle, natural order."""
 
     trace: Array
 
 
 @dataclass(frozen=True)
 class QuotientClaim:
-    """`StarkClaim` once its trace commitment is bound — what the quotient
-    stage can state, which `StarkClaim` alone cannot."""
+    """`StarkClaim` once the trace is committed.
+
+    The commitment is what makes the following challenges sound: the prover
+    is bound to one specific trace before α exists, so it cannot choose a
+    trace that happens to satisfy the constraint combination it is given."""
 
     air: Air
     public_values: Array
@@ -62,8 +78,8 @@ class QuotientClaim:
 
 @dataclass(frozen=True)
 class QuotientWitness:
-    """The trace plus its commit data — the LDE the quotient evaluates on,
-    and later the opening's oracle."""
+    """The trace plus its commit data — the low-degree extension the
+    quotient evaluates on, and later the oracle the queries open."""
 
     trace: Array
     trace_data: CommitData
@@ -71,9 +87,14 @@ class QuotientWitness:
 
 @dataclass(frozen=True)
 class TraceOpeningClaim:
-    """What survives the quotient stage: the committed trace and quotient
-    polynomials open at ζ (trace also at ζ·g) to values satisfying the
-    out-of-domain identity under α."""
+    """The evaluation claim the AIR has been reduced to.
+
+    Once Σ_j α^j·c_j = Q·Z_H is checked at a single ζ drawn from the
+    extension, the AIR is discharged: the identity is a polynomial identity
+    of bounded degree, so failing it anywhere means failing at a random
+    point except with probability deg/|EF|. ζ·g appears because transition
+    constraints read the next row, which on a multiplicative domain is the
+    same polynomial evaluated one generator step along."""
 
     trace_root: Array
     quotient_root: Array
@@ -115,8 +136,12 @@ class FriOpeningWitness:
 
 @dataclass(frozen=True)
 class FriProof:
-    """The reference `FriProof`: one commit per fold layer, the constant
-    final polynomial, the PoW witness, and the per-query openings."""
+    """The reference `FriProof`.
+
+    One commitment per fold layer, the constant the folding terminates in,
+    and per-query openings tying the layers together — the transcript of a
+    proximity test, where each query independently checks that consecutive
+    layers agree on the folding relation."""
 
     commit_phase_roots: Sequence[Array]
     final_poly: Array

@@ -30,7 +30,7 @@ from pico_zorch.commit.pcs_commit import commit_pcs
 from pico_zorch.poseidon2.koalabear import koalabear16_merkle
 from pico_zorch.uni_stark.bench_prove import _block, _WideFibAir
 from pico_zorch.uni_stark.fri_stage import (
-    _bitrev_lde_domain,
+    _lde_code,
     _open_head,
     fold_chain,
     open_batch,
@@ -70,7 +70,7 @@ def _one_pass(tree, trace, trace_data, claim, quotient, t, n, n_cols, params):
             t,
             n_cols,
             len(quotient.chunks),
-            _bitrev_lde_domain(lde_height),
+            _lde_code(n, params.log_blowup).domain(),
         )
     tm.lap("open_head(ood+obs+ro)", (ro, tt.state.sponge_state))
 

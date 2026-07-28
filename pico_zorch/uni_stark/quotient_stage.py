@@ -1,12 +1,25 @@
 # Copyright 2026 The pico-zorch Authors. SPDX-License-Identifier: Apache-2.0
 """The quotient stage: `QuotientClaim` → `TraceOpeningClaim`.
 
-The reference's mid-protocol slice (Plonky3 uni-stark prover.rs/verifier.rs
-at brevis-network/Plonky3@7fbe1908): sample α, evaluate the α-folded
-constraints over the disjoint coset, divide by Z_H, commit the chunked
-quotient, sample ζ. The verifier half is a pure transcript replay: the
-values its algebraic check would need do not exist until the opening stage
-has run, so that check belongs to the composite.
+The STARK identity. A constraint c_j vanishes on the whole trace domain H
+exactly when it is divisible by that domain's vanishing polynomial
+Z_H(X) = X^n − 1, so exhibiting a quotient
+
+    Q(X) = Σ_j α^j·c_j(X) / Z_H(X)
+
+*is* the proof that the AIR holds — the division only comes out polynomial
+if every constraint really vanishes on every row. α batches the constraints
+into one identity at the cost of a Schwartz-Zippel term, and is drawn after
+the trace commitment so the prover cannot fit a trace to it.
+
+Q is evaluated on a coset disjoint from H (where Z_H has no zeros) and split
+into `quotient_degree` chunks of trace degree, so the chunks commit on the
+same-size domain as the trace and the verifier can recombine them at ζ.
+
+Mirrors Plonky3 uni-stark prover.rs/verifier.rs at
+brevis-network/Plonky3@7fbe1908. The verifier half is a pure transcript
+replay: the opened values its algebraic check needs do not exist until the
+opening stage has run, so that check belongs to the composite.
 """
 
 from __future__ import annotations

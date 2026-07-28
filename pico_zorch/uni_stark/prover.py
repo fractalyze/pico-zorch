@@ -3,9 +3,13 @@
 
   StarkClaim ──(quotient stage)──▶ TraceOpeningClaim ──(FRI opening)──▶ TrivialClaim
 
+Each arrow trades a statement about a whole domain for one about a random
+point, and the trace commitment precedes all of them so that every later
+challenge lands on a prover already bound to its witness — the order is the
+soundness argument, not a convention.
+
 Byte-mirrors Plonky3's uni-stark prove at brevis-network/Plonky3@7fbe1908.
-Committing the trace precedes the chain because it is not a transcript
-operation; `bind_instance` is single-sourced so the roles cannot drift.
+`bind_instance` is single-sourced so the two roles cannot drift.
 """
 
 from __future__ import annotations

@@ -1,13 +1,29 @@
 # Copyright 2026 The pico-zorch Authors. SPDX-License-Identifier: Apache-2.0
 """The FRI opening stage: `TraceOpeningClaim` → `TrivialClaim`.
 
-The reference's `pcs.open`/`pcs.verify` (Plonky3 fri/src/two_adic_pcs.rs +
-fri prover/verifier at brevis-network/Plonky3@7fbe1908): observe the
-out-of-domain opened values, sample the batching α, reduce every column to
-one codeword (zorch's DEEP-ALI composition), fold it down with per-layer
-commits and βs, grind, and open the queried leaves. The claim carries points
-and commitments, never values — the prover computes values while opening,
-the verifier checks them against the fold chain.
+Everything above this point assumed the commitments hold *polynomials*. A
+Merkle root binds an arbitrary function, so what remains is a proximity
+test, and it discharges the evaluation claims in the same breath: for a
+committed f, the quotient
+
+    (f(X) − f(z)) / (X − z)
+
+is a polynomial exactly when f(z) is the true evaluation, so a low-degree
+proof of the batched quotient proves both low-degreeness and every opened
+value at once. Drawing z outside the evaluation domain is the DEEP trick —
+it denies a prover who committed to something merely *close* to a codeword
+the freedom to exploit that gap.
+
+FRI then tests low-degreeness by halving: writing f(X) = f_e(X²) + X·f_o(X²),
+a verifier-chosen β collapses the pair to f_e + β·f_o over the squared
+domain, one degree halving per layer until a constant remains. The prover
+commits each layer first, so the queries that spot-check consecutive layers
+land on a codeword it can no longer change.
+
+Mirrors Plonky3 fri/src/two_adic_pcs.rs and the fri prover/verifier at
+brevis-network/Plonky3@7fbe1908. The claim carries points and commitments,
+never values: the prover computes values while opening, and the verifier
+recovers them from the fold chain.
 """
 
 from __future__ import annotations
@@ -22,8 +38,9 @@ from frx import Array, lax
 from zk_dtypes import koalabear_mont as F
 from zk_dtypes import koalabearx4_mont as EF
 
-from zorch.coding.reed_solomon import BitReversedReedSolomon, eval_domain
+from zorch.coding.reed_solomon import BitReversedReedSolomon
 from zorch.commit.merkle import MerkleTree, Opening
+from zorch.pcs.fold import from_base_field, to_base_field
 from zorch.poly.univariate import powers
 from zorch.stage import (
     ProveResult,
@@ -32,7 +49,7 @@ from zorch.stage import (
     VerifierStage,
     VerifyResult,
 )
-from zorch.transcript import DuplexTranscript
+from zorch.transcript import DuplexTranscript, TranscriptT
 
 from pico_zorch.challenger.challenger import sample_ext
 from pico_zorch.commit.pcs_commit import GENERATOR, CommitData, commit_matrices
@@ -154,8 +171,8 @@ def _ood_values(trace, chunks, chunk_shifts, zeta, zeta_next):
 
 
 def sample_query_indices(
-    transcript: DuplexTranscript, log_max_height: int, count: int
-) -> tuple[DuplexTranscript, np.ndarray]:
+    transcript: TranscriptT, log_max_height: int, count: int
+) -> tuple[TranscriptT, np.ndarray]:
     """`count` × the reference's `sample_bits(log_max_height)`: one squeeze
     each, low bits of the *canonical* value. zorch's `sample_positions`
     reduces the Montgomery bitpattern instead, so it draws other indices."""
@@ -201,7 +218,7 @@ def fold_chain(
     folded = ro
     roots, layers = [], []
     while folded.shape[0] > (1 << log_blowup):
-        leaves = lax.bitcast_convert_type(code.pair_leaves(folded), F).reshape(-1, 8)
+        leaves = to_base_field(code.pair_leaves(folded))
         root, digest_layers = tree.commit(leaves)
         t = t.observe(root)
         t, beta = sample_ext(t)
@@ -223,10 +240,11 @@ def query_opening(batched: Opening, q: int) -> Opening:
     return Opening(batched.row[q], [p[q] for p in batched.path])
 
 
-def _bitrev_lde_domain(lde_height: int) -> Array:
-    return lax.bit_reverse(
-        eval_domain(F, lde_height, shift=fnp.array(GENERATOR, dtype=F)),
-        dimensions=(0,),
+def _lde_code(n: int, log_blowup: int) -> BitReversedReedSolomon:
+    """The code describing the committed layout: same coset and row order
+    `pcs_commit` writes, so its `domain()` is the committed x-coordinates."""
+    return BitReversedReedSolomon(
+        n, 1 << log_blowup, F, coset_shift=fnp.array(GENERATOR, dtype=F)
     )
 
 
@@ -252,7 +270,6 @@ class FriOpener(
         quotient = witness.quotient
         quotient_degree = len(quotient.chunks)
 
-        lde_height = n << log_blowup
         trace_local, trace_next, chunk_values, ro, t = _open_head(
             witness.trace,
             tuple(quotient.chunks),
@@ -264,7 +281,7 @@ class FriOpener(
             transcript,
             width,
             quotient_degree,
-            _bitrev_lde_domain(lde_height),
+            _lde_code(n, log_blowup).domain(),
         )
 
         code = BitReversedReedSolomon(n, 1 << log_blowup, F)
@@ -348,12 +365,11 @@ class FriOpeningVerifier(
         )
 
         log_max_height = claim.degree_bits + log_blowup
-        lde_height = 1 << log_max_height
         if len(proof.fri.commit_phase_roots) != log_max_height - log_blowup:
             raise ValueError("commit phase layer count does not match the height")
         t, indices = sample_query_indices(t, log_max_height, params.num_queries)
 
-        xs_br = _bitrev_lde_domain(lde_height)
+        xs_br = _lde_code(1 << claim.degree_bits, log_blowup).domain()
         code = BitReversedReedSolomon(1 << claim.degree_bits, 1 << log_blowup, F)
 
         if proof.fri.trace_openings.row.shape != (
@@ -390,9 +406,7 @@ class FriOpeningVerifier(
                 opening = query_opening(batched, q)
                 index_i = idx >> layer
                 pair_index = index_i >> 1
-                pair = lax.bitcast_convert_type(
-                    opening.row.reshape(2, 4), EF
-                ).reshape(2)
+                pair = from_base_field(opening.row[None, :], EF, 2)[0]
                 # Binding before the fold is what ties the chain to the
                 # commitment: an unbound row would fold to anything.
                 ok = ok & fnp.array_equal(pair[index_i & 1], value)

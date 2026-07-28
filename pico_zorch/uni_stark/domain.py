@@ -1,8 +1,16 @@
 # Copyright 2026 The pico-zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""Two-adic multiplicative coset helpers, mirroring the reference
-`TwoAdicMultiplicativeCoset` (Plonky3 commit/src/domain.rs at
-brevis-network/Plonky3@7fbe1908). Natural domain order throughout — the
-bit-reversed committed layout is `pico_zorch.commit`'s concern."""
+"""Two-adic multiplicative cosets and their Lagrange selectors.
+
+The trace lives on a multiplicative subgroup H = <g> of order 2^k, which is
+what makes a STARK cheap: the vanishing polynomial is X^n − 1, the next row
+is one generator step, and every domain the protocol needs (the blown-up
+LDE, the disjoint quotient coset, each chunk's sub-coset) is a shift of a
+subgroup the NTT already knows how to evaluate on.
+
+Mirrors the reference `TwoAdicMultiplicativeCoset` (Plonky3
+commit/src/domain.rs at brevis-network/Plonky3@7fbe1908). Natural domain
+order throughout — the bit-reversed committed layout is
+`pico_zorch.commit`'s concern."""
 
 from __future__ import annotations
 
@@ -88,10 +96,16 @@ class Coset:
         }
 
     def selectors_on_coset(self, coset: Coset) -> dict[str, Array]:
-        """The reference's unnormalized coset selectors, natural coset order.
+        """Boundary and transition selectors over `coset`, unnormalized as
+        the reference leaves them.
 
-        Z_H cycles with period 2^rate_bits: Z_H(s·g_N^i) = s^n·w_r^(i mod 2^r)
-        − 1, w_r = two_adic_generator(rate_bits)."""
+        These are what let one polynomial identity carry row-dependent
+        constraints: `is_first_row`/`is_last_row` are Z_H divided by the
+        single root being isolated, so they vanish on all of H but that row.
+
+        Z_H cycles with period 2^rate_bits over the coset, since
+        Z_H(s·g_N^i) = s^n·w_r^(i mod 2^r) − 1 with w_r the rate-bit
+        generator."""
         dtype = self.shift.dtype
         one = fnp.ones((), dtype)
         rate_bits = coset.log_n - self.log_n

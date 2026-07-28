@@ -5,8 +5,9 @@ Pico's `SC_Challenger = DuplexChallenger<KoalaBear, Poseidon2KoalaBear<16>,
 16, 8>` is byte-for-byte zorch's overwrite-mode `DuplexTranscript` over the
 Pico permutation — same absorb mode, same back-to-front squeeze, same
 low-canonical-bits PoW predicate — so binding the flavour is all it takes.
-The helpers add the two Plonky3 conventions the base seam does not name:
-extension sampling, and `sample_bits`.
+Challenges are drawn through zorch's `ChallengePolicy`, which reads the
+limb count off the degree ratio; only `sample_bits` is Plonky3-specific
+enough to need its own definition.
 """
 
 from __future__ import annotations
@@ -19,12 +20,17 @@ from frx import Array, lax
 from zk_dtypes import koalabear_mont as F
 from zk_dtypes import koalabearx4_mont as EF
 
+from zorch.challenge import ChallengePolicy
 from zorch.hash.poseidon2.poseidon2 import Poseidon2
-from zorch.transcript import DuplexTranscript, reinterpret_challenge
+from zorch.transcript import DuplexTranscript, TranscriptT
 
 from pico_zorch.poseidon2.koalabear import koalabear16_params
 
 RATE = 8
+
+# Pico draws every challenge in the quartic extension; naming the field here
+# names the soundness floor the whole scheme rests on.
+CHALLENGE = ChallengePolicy(EF)
 
 
 class JitPermutation:
@@ -62,16 +68,14 @@ def fresh_challenger() -> DuplexTranscript:
     )
 
 
-def sample_ext(transcript: DuplexTranscript) -> tuple[DuplexTranscript, Array]:
-    """`sample_ext_element`: four base squeezes packed as c0 + c1·X + c2·X² +
-    c3·X³ over the quartic extension X⁴ = 3."""
-    t, raw = transcript.sample(4)
-    return t, reinterpret_challenge(raw, EF)
+def sample_ext(transcript: TranscriptT) -> tuple[TranscriptT, Array]:
+    """`sample_ext_element`, which is `CHALLENGE.sample`: the policy spends
+    one squeeze per extension coefficient, packed c0 + c1·X + c2·X² + c3·X³
+    over X⁴ = 3."""
+    return CHALLENGE.sample(transcript)
 
 
-def sample_bits(
-    transcript: DuplexTranscript, bits: int
-) -> tuple[DuplexTranscript, Array]:
+def sample_bits(transcript: TranscriptT, bits: int) -> tuple[TranscriptT, Array]:
     """`CanSampleBits::sample_bits`: the low `bits` of one squeeze's
     canonical value. Masking the device array directly would read Montgomery
     bits and draw different indices."""
