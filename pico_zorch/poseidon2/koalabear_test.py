@@ -1,46 +1,52 @@
 # Copyright 2026 The pico-zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""Byte-match of the Poseidon2-KoalaBear-16 Merkle stack against Plonky3.
-
-Also the repo's wiring smoke test: a pass proves the zorch pin, the frx
-runtime, and the koalabear dtypes all resolve end to end.
-"""
+"""Byte-match of the Poseidon2-KoalaBear-16 permutation against the Pico
+reference (golden/ links the Plonky3 fork Pico v2.0.0 vendors and builds the
+permutation from Pico's own RC_16_30 table)."""
 
 from __future__ import annotations
+
+import json
+import pathlib
 
 import frx.numpy as fnp
 from absl.testing import absltest
 from zk_dtypes import koalabear_mont as F
 
-from pico_zorch.poseidon2.koalabear import koalabear16_merkle, koalabear16_perm
+from pico_zorch.poseidon2.koalabear import koalabear16_params, koalabear16_perm
 
-# Plonky3 golden (p3_commit=4318eba, default_koalabear_poseidon2_16):
-# PaddingFreeSponge<_,16,8,8> leaves + TruncatedPermutation<_,2,8,16> over
-# arange(32) reshaped to a 4x8 matrix (hash rows, fold pairs).
-_PLONKY3_MERKLE_ROOT_4X8 = fnp.array(
-    [
-        1670701318,
-        437280557,
-        23464423,
-        637192971,
-        1642004034,
-        359231982,
-        157670030,
-        587973557,
-    ],
-    dtype=F,
-)
+_GOLDEN = pathlib.Path(__file__).parent / "testdata" / "golden" / "poseidon2.json"
 
 
-class KoalabearStackTest(absltest.TestCase):
-    def test_perm_shape_and_dtype(self) -> None:
-        out = koalabear16_perm().permute(fnp.zeros((16,), dtype=F))
-        self.assertEqual(out.shape, (16,))
-        self.assertEqual(out.dtype, F)
+class KoalabearPoseidon2Test(absltest.TestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.golden = json.loads(_GOLDEN.read_text())
 
-    def test_merkle_root_matches_plonky3_golden(self) -> None:
-        _, _, tree = koalabear16_merkle()
-        raw_root, _ = tree.commit(fnp.arange(32, dtype=F).reshape(4, 8))
-        self.assertTrue(bool(fnp.array_equal(raw_root, _PLONKY3_MERKLE_ROOT_4X8)))
+    def test_constants_match_reference(self) -> None:
+        params = koalabear16_params()
+        ext = self.golden["external_constants"]
+        want_initial = fnp.array(ext[:4], dtype=F)
+        want_terminal = fnp.array(ext[4:], dtype=F)
+        self.assertTrue(
+            bool(fnp.array_equal(params.external_constants_initial, want_initial))
+        )
+        self.assertTrue(
+            bool(fnp.array_equal(params.external_constants_terminal, want_terminal))
+        )
+        want_internal = fnp.array(self.golden["internal_constants"], dtype=F)
+        self.assertTrue(
+            bool(fnp.array_equal(params.internal_constants[:, 0], want_internal))
+        )
+
+    def test_permute_byte_matches_reference(self) -> None:
+        perm = koalabear16_perm()
+        for vec in self.golden["vectors"]:
+            state = fnp.array(vec["input"], dtype=F)
+            want = fnp.array(vec["output"], dtype=F)
+            got = perm.permute(state)
+            self.assertTrue(
+                bool(fnp.array_equal(got, want)), msg=f"vector {vec['name']}"
+            )
 
 
 if __name__ == "__main__":
