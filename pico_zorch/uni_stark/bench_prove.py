@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import json
+import os
 import pathlib
 import time
 from typing import Any
@@ -102,6 +103,7 @@ def _check_golden(trace_root, quotient) -> None:
 
 
 def main() -> None:
+    _enable_persistent_cache()
     parser = argparse.ArgumentParser()
     parser.add_argument("--degree_bits", type=int, action="append")
     parser.add_argument("--n_cols", type=int, default=2)
@@ -158,6 +160,17 @@ def main() -> None:
             print(f"  [total] {(time.perf_counter() - start) * 1e3:.1f}ms")
             if is_golden_config:
                 _check_golden(trace_root, quotient)
+
+
+def _enable_persistent_cache() -> None:
+    """Cold passes recompile for minutes; the persistent cache pays that once
+    per (program, jaxlib) across invocations."""
+    cache = os.environ.get(
+        "FRX_COMPILATION_CACHE_DIR",
+        os.path.expanduser("~/.cache/pico-zorch-frxcc"),
+    )
+    os.makedirs(cache, exist_ok=True)
+    frx.config.update("jax_compilation_cache_dir", cache)
 
 
 if __name__ == "__main__":

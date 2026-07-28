@@ -97,14 +97,33 @@ def _open_batch(tree: MerkleTree, leaves: Array, digest_layers, indices: Array):
     return frx.vmap(lambda i: tree.open(leaves, digest_layers, i))(indices)
 
 
-@partial(frx.jit, static_argnames=("tree",))
-def _commit_pairs(tree: MerkleTree, pairs_base: Array):
-    return tree.commit(pairs_base)
-
-
-@partial(frx.jit, static_argnames=("code",))
-def _fold(code: BitReversedReedSolomon, folded: Array, beta: Array) -> Array:
-    return code.fold(folded, beta)
+@partial(frx.jit, static_argnames=("tree", "code", "log_blowup"))
+def fold_chain(
+    tree: MerkleTree,
+    code: BitReversedReedSolomon,
+    log_blowup: int,
+    ro: Array,
+    transcript: DuplexTranscript,
+):
+    """The whole FRI commit phase as one device program: per layer, commit
+    the pair matrix, observe the root, sample β, fold; then observe the
+    final polynomial. The layer count is static (it follows the codeword
+    shape), so the loop unrolls — one dispatch instead of ~46 kernel
+    launches per layer."""
+    t = transcript
+    folded = ro
+    roots, layers = [], []
+    while folded.shape[0] > (1 << log_blowup):
+        leaves = lax.bitcast_convert_type(code.pair_leaves(folded), F).reshape(-1, 8)
+        root, digest_layers = tree.commit(leaves)
+        t = t.observe(root)
+        t, beta = sample_ext(t)
+        folded = code.fold(folded, beta)
+        roots.append(root)
+        layers.append((leaves, tuple(digest_layers)))
+    final_poly = folded[0]
+    t = t.observe(final_poly)
+    return final_poly, tuple(roots), tuple(layers), t
 
 
 def open_batch(tree: MerkleTree, data: CommitData, indices: Array) -> Opening:
@@ -183,20 +202,13 @@ class FriOpener(
         )
 
         code = BitReversedReedSolomon(n, 1 << log_blowup, F)
-        folded = ro
-        commit_roots: list[Array] = []
-        phase_data: list[CommitData] = []
-        while folded.shape[0] > (1 << log_blowup):
-            pairs_base = lax.bitcast_convert_type(code.pair_leaves(folded), F)
-            leaves = pairs_base.reshape(-1, 8)
-            root, digest_layers = _commit_pairs(self.tree, leaves)
-            commit_roots.append(root)
-            phase_data.append(CommitData((leaves,), leaves, digest_layers))
-            t = t.observe(root)
-            t, beta = sample_ext(t)
-            folded = _fold(code, folded, beta)
-        final_poly = folded[0]
-        t = t.observe(final_poly)
+        final_poly, commit_roots, layers, t = fold_chain(
+            self.tree, code, log_blowup, ro, t
+        )
+        phase_data = [
+            CommitData((leaves,), leaves, list(digest_layers))
+            for leaves, digest_layers in layers
+        ]
 
         t, pow_witness = t.grind(self.params.proof_of_work_bits)
         t, indices = sample_query_indices(

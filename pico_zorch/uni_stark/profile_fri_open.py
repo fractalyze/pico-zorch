@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import os
 import time
 
 import frx
@@ -30,10 +31,9 @@ from pico_zorch.poseidon2.koalabear import koalabear16_merkle
 from pico_zorch.uni_stark.bench_prove import _block, _WideFibAir
 from pico_zorch.uni_stark.fri_stage import (
     _bitrev_lde_domain,
-    _commit_pairs,
-    _fold,
     _opening_pos,
     eval_matrix_at,
+    fold_chain,
     open_batch,
     reduced_openings,
     sample_query_indices,
@@ -91,38 +91,18 @@ def _one_pass(tree, trace, trace_data, claim, quotient, t, n, n_cols, params):
         )
     tm.lap("reduced_openings", ro)
 
+    from pico_zorch.commit.pcs_commit import CommitData
+
     code = BitReversedReedSolomon(n, 1 << params.log_blowup, F)
-    folded = ro
-    phase_data = []
-    commit_ms = transcript_ms = fold_ms = 0.0
     with frx.profiler.TraceAnnotation("fold_chain"):
-        while folded.shape[0] > (1 << params.log_blowup):
-            s0 = time.perf_counter()
-            pairs_base = lax.bitcast_convert_type(code.pair_leaves(folded), F)
-            leaves = pairs_base.reshape(-1, 8)
-            root, digest_layers = _commit_pairs(tree, leaves)
-            from pico_zorch.commit.pcs_commit import CommitData
-            data = CommitData((leaves,), leaves, digest_layers)
-            _block((root, data))
-            s1 = time.perf_counter()
-            tt = tt.observe(root)
-            tt, beta = sample_ext(tt)
-            _block(beta)
-            s2 = time.perf_counter()
-            folded = _fold(code, folded, beta)
-            folded.block_until_ready()
-            s3 = time.perf_counter()
-            commit_ms += (s1 - s0) * 1e3
-            transcript_ms += (s2 - s1) * 1e3
-            fold_ms += (s3 - s2) * 1e3
-            phase_data.append(data)
-    print(f"  fold_chain[{len(phase_data)} layers]")
-    print(f"    commits                 {commit_ms:8.1f}ms")
-    print(f"    transcript              {transcript_ms:8.1f}ms")
-    print(f"    folds                   {fold_ms:8.1f}ms")
-    tm.t0 = time.perf_counter()
-    tt = tt.observe(folded[0])
-    tm.lap("observe_final", tt.state.sponge_state)
+        final_poly, roots, layers, tt = fold_chain(
+            tree, code, params.log_blowup, ro, tt
+        )
+    phase_data = [
+        CommitData((leaves,), leaves, list(digest_layers))
+        for leaves, digest_layers in layers
+    ]
+    tm.lap(f"fold_chain[{len(phase_data)} layers]", (final_poly, roots, tt.state.sponge_state))
 
     with frx.profiler.TraceAnnotation("grind"):
         tt, pow_witness = tt.grind(params.proof_of_work_bits)
@@ -183,6 +163,7 @@ def profile(degree_bits: int, n_cols: int, params: FriParams, trace_dir: str) ->
 
 
 def main() -> None:
+    _enable_persistent_cache()
     parser = argparse.ArgumentParser()
     parser.add_argument("--degree_bits", type=int, default=16)
     parser.add_argument("--n_cols", type=int, default=32)
@@ -195,6 +176,17 @@ def main() -> None:
         FriParams(num_queries=args.num_queries),
         args.trace_dir,
     )
+
+
+def _enable_persistent_cache() -> None:
+    """Cold passes recompile for minutes; the persistent cache pays that once
+    per (program, jaxlib) across invocations."""
+    cache = os.environ.get(
+        "FRX_COMPILATION_CACHE_DIR",
+        os.path.expanduser("~/.cache/pico-zorch-frxcc"),
+    )
+    os.makedirs(cache, exist_ok=True)
+    frx.config.update("jax_compilation_cache_dir", cache)
 
 
 if __name__ == "__main__":

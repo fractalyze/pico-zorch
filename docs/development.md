@@ -96,10 +96,23 @@ The profiler (`profile_fri_open --trace_dir=...`, frx profiler + perfetto)
 is what got FriOpen here: the eager query loop first read 1.3 s at 2^16;
 batching the opens per tree still left 327 ms of wall for 2.7 ms of device
 work across 4,284 kernel launches — eager vmap dispatch, not math. Jitting
-`open_batch` (one cached program per tree height), `reduced_openings`, and
-the per-layer fold/commit calls collapsed FriOpen to single-digit ms. The
-remaining per-layer host loop (~17 sequential jit dispatches) is the next
-candidate if the fold chain ever dominates again.
+`open_batch`, `reduced_openings`, and finally the whole fold chain as one
+program (`fold_chain`) collapsed FriOpen to ~19 ms at 2^20, where the
+largest remaining leg is `reduced_openings`' genuinely device-bound fused
+kernel. The stages are now balanced (commit ~10 / quotient ~13 / open ~19
+at 2^20); no single dispatch-bound hotspot remains.
+
+### Compilation cache and the cold pass
+
+Always run with the persistent cache —
+`FRX_COMPILATION_CACHE_DIR=$HOME/.cache/pico-zorch-frxcc` — which the bench
+and profiler default to and `.bazelrc` passes through to tests. What it can
+and cannot buy: the XLA compile and per-fusion autotuning are cached across
+invocations, but the cold pass at 2^20 still costs ~60 s of Python
+tracing/lowering, dominated by `fold_chain`'s ~200 unrolled Merkle-level
+Poseidon2 bodies (distinct shapes per level, so each traces separately) —
+tracing is not cacheable by design. Shrinking it needs shape-generic level
+bodies upstream (zorch's `scan_body` machinery), not a bigger cache.
 
 A ratio against Pico is only a baseline when both sides prove the **same
 instance** with **byte-identical output** on the **same hardware** —
