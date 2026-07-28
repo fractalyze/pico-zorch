@@ -2,12 +2,12 @@
 """TwoAdicFriPcs.commit on zorch blocks.
 
 The reference (Plonky3 fri/src/two_adic_pcs.rs at brevis-network/Plonky3@
-7fbe1908, the fork Pico v2.0.0 vendors) commits a matrix of evaluations on a
-size-n subgroup as: coset LDE with shift `GENERATOR / domain.shift` onto the
+7fbe1908, the fork Pico v2.0.0 vendors) commits evaluations on a size-n
+subgroup as: coset LDE with shift `GENERATOR / domain.shift` onto the
 blown-up domain, rows bit-reversed, one Merkle tree over the row leaves.
-Every committed LDE therefore lives on the coset `GENERATOR·<g>`; a batch of
-equal-height matrices shares one tree whose leaf i hashes the concatenation
-of every matrix's row i in commit order.
+That shift choice puts every committed LDE on the same coset `GENERATOR·<g>`
+whatever domain it came from. A batch of equal-height matrices shares one
+tree, leaf i hashing every matrix's row i in commit order.
 """
 
 from __future__ import annotations
@@ -37,8 +37,8 @@ def coset_lde(evals: Array, log_blowup: int, shift: Array) -> Array:
 
 
 def bit_reverse_rows(matrix: Array) -> Array:
-    """Reference row order: row i holds the evaluation at exponent
-    reverse_bits(i)."""
+    """Row i holds the evaluation at exponent reverse_bits(i) — the layout
+    that makes a fold's conjugate pair adjacent."""
     return lax.bit_reverse(matrix, dimensions=(0,))
 
 
@@ -55,9 +55,9 @@ class CommitData:
 def commit_matrices(
     tree: MerkleTree, matrices: Sequence[Array]
 ) -> tuple[Array, CommitData]:
-    """One Merkle tree over equal-height matrices (the reference's
-    single-height MerkleTreeMmcs layout; mixed heights are out of scope for
-    the Pico glue until a chip batch needs them)."""
+    """One Merkle tree over equal-height matrices. The reference's
+    MerkleTreeMmcs also injects shorter matrices at matching layers; no
+    caller here commits mixed heights, so that path is unimplemented."""
     heights = {m.shape[0] for m in matrices}
     if len(heights) != 1:
         raise ValueError(f"matrices must share a height, got {sorted(heights)}")
@@ -85,9 +85,10 @@ def commit_pcs(
     *,
     shifts: Sequence[Any] | None = None,
 ) -> tuple[Array, CommitData]:
-    """The reference `pcs.commit`: per-matrix coset LDE (shift GENERATOR/domain
-    shift, i.e. GENERATOR for natural domains unless `shifts` overrides), rows
-    bit-reversed, one shared tree — one device program per shape set."""
+    """The reference `pcs.commit`: per-matrix coset LDE, rows bit-reversed,
+    one shared tree. `shifts` defaults to GENERATOR, which is correct for
+    natural (shift-1) domains; a quotient chunk passes GENERATOR/its own
+    shift."""
     dtype = evals[0].dtype
     if shifts is None:
         shifts = [fnp.array(GENERATOR, dtype=dtype)] * len(evals)

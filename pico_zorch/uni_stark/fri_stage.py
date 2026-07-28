@@ -46,11 +46,11 @@ from pico_zorch.uni_stark.types import (
 
 
 def _eval_columns(coeffs: Array, y: Array) -> Array:
-    """`[w, n]` coefficient rows evaluated at the extension point `y`:
-    Σ_j coeffs[:, j]·y^j via log-doubling powers. The coefficients are
-    promoted to the extension first — a 2-D mixed base×extension multiply
-    trips an XLA shape-rewrite RET_CHECK in the frx lowering (as does
-    `eval_coeffs`' associative-scan schedule)."""
+    """`[w, n]` coefficient rows evaluated at the extension point `y`.
+
+    Coefficients are promoted before the multiply: a 2-D mixed
+    base×extension operand trips an XLA shape-rewrite RET_CHECK in the frx
+    lowering, which is also why this does not call `zorch`'s `eval_coeffs`."""
     ypow = powers(y, coeffs.shape[-1])
     return (coeffs.astype(y.dtype) * ypow[None, :]).sum(axis=-1)
 
@@ -67,20 +67,15 @@ def reduced_openings(
     width: int,
     quotient_degree: int,
 ) -> Array:
-    """The reference's α-batched opening reduction:
-    Σ_m α^m·(value_m − col_m(X))/(z_m − X), α powers running consecutively
-    because each round's offset is the running column count.
+    """Σ_m α^m·(value_m − col_m(X))/(z_m − X) — the reference's α-batched
+    opening reduction, with α powers consecutive because each round's offset
+    is the running column count.
 
-    Two departures from a literal transcription, both field-identical:
-
-    The trace is opened at ζ and ζ·g, which the reference walks as two
-    rounds over the *same* columns with offsets α^0 and α^w — so its inner
-    α-weighted column sum is computed once here and shared. Likewise the
-    quotient chunks' per-chunk offsets (α^{2w+4i}) times their inner powers
-    (α^j) collapse to one consecutive run α^{2w+k}.
-
-    The two point quotients then merge over a single inversion:
-    n₀/d₀ + n₁/d₁ = (n₀d₁ + n₁d₀)/(d₀d₁)."""
+    Field-identical to the reference while looking unlike it: the trace's
+    two rounds (ζ, ζ·g) share one inner column sum because they differ only
+    by the offset α^w, the chunks' offsets α^{2w+4i} absorb their inner α^j,
+    and the point quotients merge over a single inversion
+    (n₀/d₀ + n₁/d₁ = (n₀d₁ + n₁d₀)/(d₀d₁))."""
     ap = powers(alpha, 2 * width + 4 * quotient_degree)
     trace_cols = trace_leaves.astype(EF)
     quotient_cols = quotient_leaves.astype(EF)
@@ -115,7 +110,9 @@ def _open_head(
     quotient_degree,
     domain,
 ):
-    """OOD values -> observe -> α -> reduced openings, one device program."""
+    """One device program from the opened values through the reduction: the
+    intermediates are full-height codewords, so a stage boundary here would
+    pay a round trip per array."""
     trace_local, trace_next, chunk_values = _ood_values(
         trace, chunks, chunk_shifts, zeta, zeta_next
     )
@@ -137,10 +134,9 @@ def _open_head(
 
 
 def _ood_values(trace, chunks, chunk_shifts, zeta, zeta_next):
-    """All out-of-domain values; the trace interpolates once for both ζ and
-    ζ·g. Interpolation is on the plain subgroup (coefficients of
-    p̃(y) = p(shift·y)), evaluation at y = z/shift — field-identical to the
-    reference's barycentric `interpolate_coset`."""
+    """Interpolate on the plain subgroup (coefficients of p̃(y) = p(shift·y))
+    and evaluate at y = z/shift — field-identical to the reference's
+    barycentric `interpolate_coset`."""
     n = trace.shape[0]
     coeffs = lax.ntt(trace.T, ntt_type="INTT", ntt_length=n)
     trace_local = _eval_columns(coeffs, zeta)
@@ -161,8 +157,8 @@ def sample_query_indices(
     transcript: DuplexTranscript, log_max_height: int, count: int
 ) -> tuple[DuplexTranscript, np.ndarray]:
     """`count` × the reference's `sample_bits(log_max_height)`: one squeeze
-    each, low bits of the canonical value (zorch's `sample_positions` reduces
-    the Montgomery bitpattern instead, so it cannot be used here)."""
+    each, low bits of the *canonical* value. zorch's `sample_positions`
+    reduces the Montgomery bitpattern instead, so it draws other indices."""
     t, raw = transcript.sample(count)
     canonical = np.asarray(lax.convert_element_type(raw, fnp.uint32))
     return t, (canonical & ((1 << log_max_height) - 1)).astype(np.int64)
@@ -175,9 +171,8 @@ def _open_batch(tree: MerkleTree, leaves: Array, digest_layers, indices: Array):
 
 @partial(frx.jit, static_argnames=("tree", "num_layers"))
 def _open_all(tree: MerkleTree, trees, indices: Array, num_layers: int):
-    """Every tree's query openings in one program: the input trees at the
-    query index, then fold layer `l` at `index >> (l+1)`. One dispatch
-    instead of one per tree."""
+    """Fold layer `l` is queried at `index >> (l+1)`: each fold halves the
+    codeword, and the pair leaf holding position `i` sits at `i >> 1`."""
     (trace_leaves, trace_digests), (q_leaves, q_digests), *layers = trees
     opens = [
         frx.vmap(lambda i: tree.open(trace_leaves, trace_digests, i))(indices),
@@ -189,58 +184,6 @@ def _open_all(tree: MerkleTree, trees, indices: Array, num_layers: int):
     return tuple(opens)
 
 
-@partial(
-    frx.jit,
-    static_argnames=(
-        "tree",
-        "code",
-        "log_blowup",
-        "pow_bits",
-        "num_queries",
-        "log_max_height",
-    ),
-)
-def fold_and_open(
-    tree: MerkleTree,
-    code: BitReversedReedSolomon,
-    log_blowup: int,
-    pow_bits: int,
-    num_queries: int,
-    log_max_height: int,
-    ro: Array,
-    transcript: DuplexTranscript,
-    trace_leaves: Array,
-    trace_digests,
-    quotient_leaves: Array,
-    quotient_digests,
-):
-    """The whole opening tail as one device program: fold chain, final-poly
-    observe, grind, query sampling, and every tree's openings.
-
-    Fusing past the fold chain is what keeps the ~460 per-layer digest
-    arrays and the query indices off the Python boundary — marshalling them
-    cost more than the kernels did."""
-    final_poly, roots, layers, t = fold_chain(
-        tree, code, log_blowup, ro, transcript
-    )
-    t, pow_witness = t.grind(pow_bits)
-    t, raw = t.sample(num_queries)
-    idx = (
-        lax.convert_element_type(raw, fnp.uint32) & fnp.uint32((1 << log_max_height) - 1)
-    ).astype(fnp.int32)
-
-    def opens_at(leaves, digests, indices):
-        return frx.vmap(lambda i: tree.open(leaves, digests, i))(indices)
-
-    trace_open = opens_at(trace_leaves, trace_digests, idx)
-    quotient_open = opens_at(quotient_leaves, quotient_digests, idx)
-    layer_opens = tuple(
-        opens_at(leaves, digests, idx >> (layer + 1))
-        for layer, (leaves, digests) in enumerate(layers)
-    )
-    return final_poly, roots, pow_witness, trace_open, quotient_open, layer_opens, t
-
-
 @partial(frx.jit, static_argnames=("tree", "code", "log_blowup"))
 def fold_chain(
     tree: MerkleTree,
@@ -249,11 +192,11 @@ def fold_chain(
     ro: Array,
     transcript: DuplexTranscript,
 ):
-    """The whole FRI commit phase as one device program: per layer, commit
-    the pair matrix, observe the root, sample β, fold; then observe the
-    final polynomial. The layer count is static (it follows the codeword
-    shape), so the loop unrolls — one dispatch instead of ~46 kernel
-    launches per layer."""
+    """The FRI commit phase as one device program.
+
+    The layer count follows the codeword shape, not data, so the `while`
+    unrolls at trace time — every layer's commit, squeeze and fold land in
+    a single dispatch instead of one per layer."""
     t = transcript
     folded = ro
     roots, layers = [], []
@@ -271,15 +214,12 @@ def fold_chain(
 
 
 def open_batch(tree: MerkleTree, data: CommitData, indices: Array) -> Opening:
-    """All queries' openings of one tree as one jitted, vmapped device call.
-    Eager vmap dispatches every per-level gather as its own kernel (the
-    profiler read 4,284 launches for 2.7 ms of device work); the jit
-    collapses each tree's openings to a single program, cached per height."""
+    """All queries' openings of one tree as one jitted, vmapped call —
+    eager `vmap` would dispatch every per-level gather as its own kernel."""
     return _open_batch(tree, data.leaves, data.digest_layers, indices)
 
 
 def query_opening(batched: Opening, q: int) -> Opening:
-    """Query `q`'s view of a batched Opening."""
     return Opening(batched.row[q], [p[q] for p in batched.path])
 
 
@@ -370,7 +310,8 @@ class FriOpeningVerifier(
     VerifierStage[TraceOpeningClaim, TrivialClaim, FriOpeningProof, DuplexTranscript]
 ):
     tree: MerkleTree
-    # AIR-fixed shape configuration (statement-vs-configuration split).
+    # Fixed by the AIR, so they configure the role rather than riding the
+    # claim, which carries only what varies per statement.
     width: int
     quotient_degree: int
     params: FriParams = FriParams()
@@ -452,8 +393,8 @@ class FriOpeningVerifier(
                 pair = lax.bitcast_convert_type(
                     opening.row.reshape(2, 4), EF
                 ).reshape(2)
-                # The opened row must bind the running value at this index's
-                # slot before it feeds the fold.
+                # Binding before the fold is what ties the chain to the
+                # commitment: an unbound row would fold to anything.
                 ok = ok & fnp.array_equal(pair[index_i & 1], value)
                 ok = ok & fnp.array_equal(
                     self.tree.reconstruct_root(pair_index, opening),

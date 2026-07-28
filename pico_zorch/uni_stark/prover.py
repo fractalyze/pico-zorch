@@ -4,9 +4,8 @@
   StarkClaim ──(quotient stage)──▶ TraceOpeningClaim ──(FRI opening)──▶ TrivialClaim
 
 Byte-mirrors Plonky3's uni-stark prove at brevis-network/Plonky3@7fbe1908.
-Committing the trace is not a transcript operation and precedes the chain;
-`bind_instance` is the one definition of the instance binding, shared by
-both roles.
+Committing the trace precedes the chain because it is not a transcript
+operation; `bind_instance` is single-sourced so the roles cannot drift.
 """
 
 from __future__ import annotations
@@ -41,8 +40,8 @@ def bind_instance(
     trace_root: Array,
     public_values: Array,
 ) -> DuplexTranscript:
-    """The reference's instance observation: log_degree, trace commitment,
-    public values — before any challenge."""
+    """The reference's instance observation, which must land before any
+    challenge is drawn: log_degree, trace commitment, public values."""
     t = transcript.observe(fnp.array([degree_bits], dtype=F))
     t = t.observe(trace_root)
     return t.observe(public_values)

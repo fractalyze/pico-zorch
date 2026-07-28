@@ -1,13 +1,13 @@
 # Copyright 2026 The pico-zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""Sub-phase profile of FriOpener.prove — where the wall clock actually goes.
+"""Sub-phase profile of the FRI opening stage.
 
-Replays the stage's exact step sequence with a device sync after each
-sub-phase; `--trace_dir` additionally wraps the warm pass in the frx
-profiler (perfetto trace enabled) for a per-kernel device timeline.
+Replays the stage's step sequence with a device sync after each sub-phase,
+so a sub-phase's wall time is its own rather than the next sync's.
+`--trace_dir` also captures an frx profiler trace of the warm pass; reading
+device-busy against wall inside a sub-phase is what distinguishes kernel
+cost from dispatch cost.
 
-    FRX_PLATFORMS=cuda CUDA_VISIBLE_DEVICES=<idx> \\
-        bazel run //pico_zorch/uni_stark:profile_fri_open -- \\
-        --degree_bits=16 --trace_dir=/tmp/friopen-trace
+Invocation and environment: docs/development.md.
 """
 
 from __future__ import annotations

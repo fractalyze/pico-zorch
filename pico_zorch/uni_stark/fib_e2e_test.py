@@ -1,11 +1,10 @@
 # Copyright 2026 The pico-zorch Authors. SPDX-License-Identifier: Apache-2.0
 """End-to-end byte-match of the uni-stark prover against the reference proof.
 
-golden/ runs the fork's own `p3_uni_stark::prove` over the Fibonacci AIR with
-Pico's KoalaBearPoseidon2 config and dumps the entire proof; this test proves
-the same trace through the zorch pipeline and compares every wire field —
-commitments, out-of-domain values, FRI roots, final poly, PoW witness, query
-openings and Merkle paths.
+golden/ proves the same Fibonacci instance through the fork's own
+`p3_uni_stark::prove` under Pico's KoalaBearPoseidon2 config; every wire
+field is compared here, so this test is what licenses any claim that the
+pipeline reproduces Pico's prover.
 """
 
 from __future__ import annotations
@@ -132,12 +131,10 @@ class FibE2eTest(absltest.TestCase):
                 zip(proof.opening.fri.commit_phase_openings, want_q["commit_phase_openings"])
             ):
                 got_open = query_opening(batched, q)
-                # The reference stores only the sibling; our opening holds the
-                # full pair row [8 base] = 2 extension values.
                 row = _canonical(got_open.row).reshape(2, 4)
                 want_sib = np.array(_ext(want_step["sibling_value"]))
-                # The reference stores only the sibling value; the full pair
-                # row must contain it in one of its two slots.
+                # The reference stores one sibling where the pair row holds
+                # both halves, so which slot it lands in follows the query.
                 self.assertTrue(
                     (row[0] == want_sib).all() or (row[1] == want_sib).all(),
                     msg=f"query {q} layer {layer} sibling",

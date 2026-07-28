@@ -4,8 +4,8 @@
 
 quotient(X) = Σ_j α^{C-1-j}·c_j(X) / Z_H(X) over the quotient coset, natural
 order. The α powers run high-to-low because the reference reverses them while
-its folder walks constraints first-to-last — emission order is part of the
-byte contract (see `air.Air`).
+its folder walks constraints first-to-last, which is why an AIR's emission
+order is part of the byte contract (`air.Air`).
 """
 
 from __future__ import annotations
@@ -37,9 +37,9 @@ def quotient_values(
 ) -> Array:
     """`[quotient_size]` extension evaluations of the quotient polynomial.
 
-    `trace_on_quotient_domain` is `[quotient_size, width]` in natural coset
-    order; the "next" row for point i is row i + 2^(coset log gap), wrapping.
-    """
+    A trace row's successor sits `2^(coset log gap)` rows away on the
+    quotient coset, and wraps — the coset is `2^log_qd` interleaved copies
+    of the trace domain."""
     sels = trace_domain.selectors_on_coset(quotient_domain)
     n = quotient_domain.size
     next_step = 1 << (quotient_domain.log_n - trace_domain.log_n)
@@ -69,6 +69,6 @@ def quotient_values(
 
 
 def flatten_to_base(quotient: Array) -> Array:
-    """`[n]` extension evaluations -> `[n, 4]` base columns (limb order
-    c0..c3), the reference's `flatten_to_base`."""
+    """`[n]` extension evaluations -> `[n, 4]` base columns, limb order
+    c0..c3 — the reference's `flatten_to_base`."""
     return lax.bitcast_convert_type(quotient, F)

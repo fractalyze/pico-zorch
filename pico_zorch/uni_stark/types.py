@@ -51,8 +51,8 @@ class StarkWitness:
 
 @dataclass(frozen=True)
 class QuotientClaim:
-    """`StarkClaim` with its trace commitment bound — the quotient stage's
-    input, formed by the composite after `bind_instance`."""
+    """`StarkClaim` once its trace commitment is bound — what the quotient
+    stage can state, which `StarkClaim` alone cannot."""
 
     air: Air
     public_values: Array
@@ -62,8 +62,8 @@ class QuotientClaim:
 
 @dataclass(frozen=True)
 class QuotientWitness:
-    """The trace plus its commit data (the LDE the quotient is evaluated
-    on, and later the FRI opening's oracle)."""
+    """The trace plus its commit data — the LDE the quotient evaluates on,
+    and later the opening's oracle."""
 
     trace: Array
     trace_data: CommitData
@@ -71,8 +71,8 @@ class QuotientWitness:
 
 @dataclass(frozen=True)
 class TraceOpeningClaim:
-    """The quotient stage's reduced claim: the committed trace and quotient
-    polynomials open at ζ (trace also at ζ·g) to values that satisfy the
+    """What survives the quotient stage: the committed trace and quotient
+    polynomials open at ζ (trace also at ζ·g) to values satisfying the
     out-of-domain identity under α."""
 
     trace_root: Array
@@ -85,8 +85,8 @@ class TraceOpeningClaim:
 
 @dataclass(frozen=True)
 class QuotientData:
-    """Prover-only quotient stage output, the FRI opening's witness half:
-    chunk evaluations, their domains, and the commit data."""
+    """The opening's witness half. Prover-only: nothing here is a claim, so
+    it travels by witness rather than widening the reduced claim."""
 
     chunks: Sequence[Array]
     qc_domains: Sequence[Coset]
@@ -95,9 +95,8 @@ class QuotientData:
 
 @dataclass(frozen=True)
 class QuotientProof:
-    """The quotient stage's reduction proof. Only `quotient_root` is wire;
-    `data` is prover-only (the FRI opening's witness half, zisk-zorch's
-    `TraceCommitment` convention), absent on the verifier path and never
+    """Only `quotient_root` is wire. `data` rides along for the composite to
+    hand to the opening stage, is absent on the verifier path, and is never
     serialized."""
 
     quotient_root: Array
@@ -106,8 +105,8 @@ class QuotientProof:
 
 @dataclass(frozen=True)
 class FriOpeningWitness:
-    """Everything the FRI opening interpolates and opens: the natural-order
-    evaluations and both commitments' prover data."""
+    """Everything the opening interpolates and opens: the natural-order
+    evaluations, and both commitments' prover data."""
 
     trace: Array
     trace_data: CommitData
@@ -117,16 +116,14 @@ class FriOpeningWitness:
 @dataclass(frozen=True)
 class FriProof:
     """The reference `FriProof`: one commit per fold layer, the constant
-    final polynomial, the PoW witness, and per-query openings of every
-    committed matrix along the fold chain."""
+    final polynomial, the PoW witness, and the per-query openings."""
 
     commit_phase_roots: Sequence[Array]
     final_poly: Array
     pow_witness: Array
-    # Batched over queries (leading axis num_queries): the trace and quotient
-    # leaf-row openings, then one batched pair-row opening per fold layer —
-    # the reference's `CommitPhaseProofStep` carries only the sibling, row
-    # column `(index >> layer) ^ 1 & 1` here.
+    # Batched over queries on the leading axis. The reference's
+    # `CommitPhaseProofStep` stores only a sibling; the full pair row is kept
+    # instead, its sibling at column `(index >> layer) ^ 1 & 1`.
     trace_openings: Opening
     quotient_openings: Opening
     commit_phase_openings: Sequence[Opening]
@@ -134,9 +131,7 @@ class FriProof:
 
 @dataclass(frozen=True)
 class FriOpeningProof:
-    """The opening stage's wire message: the out-of-domain opened values and
-    the FRI low-degree proof (the reference's `OpenedValues` +
-    `opening_proof`)."""
+    """The reference's `OpenedValues` + `opening_proof`."""
 
     trace_local: Array  # [width] extension
     trace_next: Array  # [width] extension
@@ -146,7 +141,7 @@ class FriOpeningProof:
 
 @dataclass(frozen=True)
 class StarkProof:
-    """The composite wire proof, the reference `Proof` field for field."""
+    """The reference `Proof`, field for field."""
 
     trace_root: Array
     quotient_root: Array

@@ -1,25 +1,12 @@
 # Copyright 2026 The pico-zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""Per-stage wall-clock for the uni-stark prover, sp1-zorch's
-`verify_prove_shard` pattern: prove for real, time each stage, repeat.
+"""Per-stage wall-clock for the uni-stark prover.
 
-Mirrors the composite's call order (commit -> quotient stage -> FRI opening)
-so a stage's time covers exactly its claim reduction. `--runs=N` proves N
-times in one process: pass 1 is cold (compiles), later passes are warm; read
-a converged pass and quote the spread (docs/development.md).
+Mirrors the composite's call order so a stage's time covers exactly its
+claim reduction, and re-checks the golden commitments when the size matches
+the fixture — a timed run is then also a byte-match run. `--trace_dir`
+captures an frx profiler trace of the last pass.
 
-The trace is Fibonacci at any power-of-two height (`--degree_bits`), padded
-to `--n_cols` columns of zeros to sweep width; the extra columns carry no
-constraints, so quotient time under-reads a real AIR of that width — size
-scaling is real, absolute quotient time is a lower bound. At the golden
-config (degree_bits=3, n_cols=2, default FRI params) the commitments and FRI
-tail are checked against the committed fixture, so a timed run is also a
-byte-match run.
-
-Run (CPU is the default; pin an idle GPU for real numbers):
-
-    FRX_PLATFORMS=cuda CUDA_VISIBLE_DEVICES=<idx> \\
-        bazel run //pico_zorch/uni_stark:bench_prove -- \\
-        --degree_bits=16 --n_cols=32 --runs=5
+How to run and read it, including which pass to trust: docs/development.md.
 """
 
 from __future__ import annotations
@@ -58,16 +45,16 @@ _GOLDEN = pathlib.Path(__file__).parent / "testdata" / "golden" / "fib_prove.jso
 
 @dataclasses.dataclass(frozen=True)
 class _WideFibAir(FibonacciAir):
-    """Fibonacci in columns 0-1, zero padding beyond — constraint set (and
-    degree) unchanged, so the trace/commit/FRI legs scale with width while
-    the quotient leg stays the 5-constraint Fibonacci load."""
+    """Fibonacci in columns 0-1, zero padding beyond: width sweeps without
+    the constraint set (or its degree) changing."""
 
     width: int = 2
 
 
 def _block(obj: Any) -> None:
-    """block_until_ready over a dataclass tree — proof types are not pytrees,
-    so a plain block on the result would return before the device finished."""
+    """`block_until_ready` over a dataclass tree. Proof types are not
+    registered pytrees, so blocking on the result itself returns while the
+    device is still working and every timing below it reads short."""
     if hasattr(obj, "block_until_ready"):
         obj.block_until_ready()
     elif dataclasses.is_dataclass(obj) and not isinstance(obj, type):
@@ -176,8 +163,8 @@ def main() -> None:
 
 
 def _enable_persistent_cache() -> None:
-    """Cold passes recompile for minutes; the persistent cache pays that once
-    per (program, jaxlib) across invocations."""
+    """A cold pass compiles for minutes; the cache pays that once per
+    (program, jaxlib) across invocations."""
     cache = os.environ.get(
         "FRX_COMPILATION_CACHE_DIR",
         os.path.expanduser("~/.cache/pico-zorch-frxcc"),

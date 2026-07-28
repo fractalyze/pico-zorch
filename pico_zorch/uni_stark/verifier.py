@@ -3,9 +3,10 @@
 
 Replays the same chain (quotient stage, then FRI opening), ANDing each
 stage's verdict, and closes with the out-of-domain identity
-folded_constraints(ζ)/Z_H(ζ) == quotient(ζ) — checked here because the
-composite is the first place the opened values and the AIR meet. Algebraic
-failure lands in `VerifyResult.ok`; structurally impossible proofs raise.
+folded_constraints(ζ)/Z_H(ζ) == quotient(ζ). That check lives here, not in
+a stage, because the composite is the first place the opened values and the
+AIR meet. Algebraic failure lands in `VerifyResult.ok`; a structurally
+impossible proof raises instead, since no challenge can rescue it.
 """
 
 from __future__ import annotations
@@ -47,10 +48,9 @@ def _ext_monomial(e: int) -> Array:
 def _ood_identity(
     claim: StarkClaim, opening: TraceOpeningClaim, proof: StarkProof
 ) -> Array:
-    """The reference verifier's final check: the α-folded constraints at ζ,
-    divided by Z_H, equal the chunk recombination (each chunk weighted by the
-    other chunk domains' vanishing polynomials, normalized at its first
-    point)."""
+    """The α-folded constraints at ζ, divided by Z_H, must equal the chunk
+    recombination — each chunk weighted by the other chunk domains'
+    vanishing polynomials, normalized at its own first point."""
     air = claim.air
     log_qd = log_quotient_degree(air.constraint_degree)
     quotient_degree = 1 << log_qd

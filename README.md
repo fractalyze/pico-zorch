@@ -21,11 +21,9 @@ and benchmark against Pico's CUDA reference.
 ## Status
 
 The full uni-stark proving pipeline runs on zorch's claim-reduction stages
-and byte-matches the reference end to end — every wire field of a Fibonacci
-proof (commitments, out-of-domain openings, FRI roots, final polynomial, PoW
-witness, all query openings and Merkle paths) equals the output of the
-vendored fork's own `p3_uni_stark::prove` under Pico's RISCV-phase FRI
-config (log_blowup 1, 84 queries, 16 PoW bits):
+and byte-matches the reference end to end: every wire field of a Fibonacci
+proof equals the output of the vendored fork's own `p3_uni_stark::prove`
+under Pico's RISCV-phase FRI config (log_blowup 1, 84 queries, 16 PoW bits).
 
 | Layer | Module | Byte-matched against |
 | --- | --- | --- |
@@ -65,11 +63,11 @@ reference's `find_any` grind "lowest witness wins", the same rule zorch's
 `grind_search` implements — so a regeneration is a no-op unless the
 reference pin changes.
 
-Fixtures stay small (KBs, the family convention): the e2e proof golden
-stores only a prefix of the 84 query proofs, since the pre-query transcript
-(roots, challenges, final polynomial, PoW witness) is a sponge image of
-every earlier byte and pins the rest; the consumer still proves with all 84
-queries and compares the stored prefix.
+The e2e proof golden stores checkpoint query proofs rather than all 84: the
+pre-query transcript (roots, challenges, final polynomial, PoW witness) is a
+sponge image of every earlier byte, so it already pins the query index
+stream, and the last checkpoint covers its tail. Consumers still prove with
+the full query count.
 
 ## The scheme (what Pico actually runs)
 

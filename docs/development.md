@@ -36,115 +36,67 @@ overrides with `--test_env=FRX_PLATFORMS=cuda`. The byte-match fixtures under
 
 ## Per-stage bench — `bench_prove`
 
-`//pico_zorch/uni_stark:bench_prove` follows sp1-zorch's
-`verify_prove_shard` pattern: it proves for real, mirrors the composite's
-stage order, prints per-stage wall-clock, and at the golden config doubles
-as a byte-match run.
+`//pico_zorch/uni_stark:bench_prove` proves for real, mirrors the composite's
+stage order, prints per-stage wall-clock, and at the golden config doubles as
+a byte-match run. `--trace_dir` additionally captures an frx profiler trace
+(perfetto), which is how a stage's wall time is split into device work and
+orchestration; `profile_fri_open` does the same one level down, per
+sub-phase of the opening stage.
 
 ```sh
-FRX_PLATFORMS=cuda CUDA_VISIBLE_DEVICES=<idx> \
+FRX_COMPILATION_CACHE_DIR=$HOME/.cache/pico-zorch-frxcc \
+  XLA_PYTHON_CLIENT_PREALLOCATE=false \
+  CUDA_DEVICE_ORDER=PCI_BUS_ID CUDA_VISIBLE_DEVICES=<idle> \
+  FRX_PLATFORMS=cuda \
   bazel run //pico_zorch/uni_stark:bench_prove -- \
-  --degree_bits=16 --n_cols=32 --runs=5
+  --degree_bits=20 --n_cols=32 --runs=5
 ```
 
-Output, per pass:
+Every element of that invocation earns its place:
 
-```
- pass 3:
-  [phase TraceCommit] X.Yms
-  [phase Quotient] X.Yms
-  [phase FriOpen] X.Yms
-  [total] X.Yms
-```
-
-### How to read it
-
-- **Use `--runs=5` and read a converged pass (3–5), never pass 1 or the
-  first warm pass.** Pass 1 is cold (XLA compiles); the first warm pass has
-  not always settled. Quote the min–max spread across converged passes
-  beside any number — a phase whose spread is a large fraction of its value
-  is not evidence in either direction from a single pass.
-- **Pin an idle card** on a shared box (`CUDA_DEVICE_ORDER=PCI_BUS_ID
-  CUDA_VISIBLE_DEVICES=<idx>`); contending with another prove during CUDA
-  init can hard-kill the run.
-- **The golden gate is the trust anchor.** At `--degree_bits=3 --n_cols=2`
-  with default FRI params the run checks its commitments against the
-  committed fixture (and `fib_e2e_test` pins every proof field at that
-  config). Larger sizes run the same code path but have no golden; a timed
-  number is only as trustworthy as the byte-match at the same pin, so run
-  the e2e test whenever the zorch pin or frx wheels change.
+- **`FRX_COMPILATION_CACHE_DIR`** caches XLA compilation and per-fusion
+  autotuning across invocations; `.bazelrc` forwards it to tests. It does
+  not shorten the cold pass much — that is dominated by Python tracing of
+  the fold chain's per-level Merkle bodies, whose shapes differ per level,
+  and tracing is not cacheable. Shrinking it needs shape-generic level
+  bodies upstream (zorch's `scan_body`).
+- **`XLA_PYTHON_CLIENT_PREALLOCATE=false`** — a run that compiles many
+  programs loads CUBINs against the preallocation pool and OOMs without it.
+- **An idle card**: contending with another prove during CUDA init can
+  hard-kill the run.
+- **`--runs=5`**, then read a converged pass (3–5), never pass 1 (cold) or
+  the first warm pass (not always settled). Quote the min–max spread beside
+  any number; a phase whose spread is a large fraction of its value is not
+  evidence in either direction from a single pass.
 
 ### What a number here does and does not mean
 
-The trace is Fibonacci padded to `--n_cols` zero columns: commit, LDE and
+At `--degree_bits=3 --n_cols=2` with default FRI params the run checks its
+commitments against the committed fixture, and `fib_e2e_test` pins every
+proof field at that config. Larger sizes run the same code path with no
+golden, so a timed number is only as trustworthy as the byte-match at the
+same pin — run the e2e test whenever the zorch pin or frx wheels move.
+
+The trace is Fibonacci padded to `--n_cols` zero columns. Commit, LDE and
 FRI legs scale with the real width, but the quotient leg keeps Fibonacci's
-5-constraint load — its absolute time is a lower bound for a real AIR of
-that width, and only its *size* scaling is meaningful.
+five constraints: its absolute time is a lower bound for a real AIR of that
+width, and only its *size* scaling is meaningful.
 
-### First numbers (2026-07-28, RTX 5090, zorch @7e7541d, frx dev20260725)
+### Comparing against Pico
 
-Converged warm passes, `--n_cols=32`, GPU, 84 queries:
+A ratio against Pico is a baseline only when both sides prove the **same
+instance** with **byte-identical output** on the **same hardware**. Nothing
+here satisfies that against Pico's machine prover: its RISCV shard has a
+multi-chip outer transcript this repo does not implement, so ratios against
+Pico's published block-proving numbers are scope-confounded.
 
-| Stage | 2^16 rows | 2^20 rows | spread (2^20) |
-|---|---|---|---|
-| TraceCommit | ~0.9 ms | ~8.1 ms | 8.1–10.9 |
-| Quotient | ~1.7 ms | ~2.8 ms | 2.7–3.1 |
-| FriOpen | ~4.3 ms | ~8.0 ms | 8.0–8.4 |
-| total | ~8.9 ms | ~20.9 ms | 20.4–24.9 |
-
-Whole-prove device utilization is **78%** (TraceCommit 88%, FriOpen 74%),
-measured by annotating the stages and summing device-side events inside
-each window — `bench_prove --trace_dir=...`. With ~20 ms wall against
-~17.6 ms of device work, the remaining orchestration headroom is a few ms;
-further wins have to come from the kernels themselves (the leaf-hash
-`sponge_hash` and the NTT passes are the top entries).
-
-The profiler (`profile_fri_open --trace_dir=...`, frx profiler + perfetto)
-drove every step down from a 1.3 s starting point at 2^16. The sequence,
-each step found by reading device-busy against wall in the trace:
-
-| Finding | Fix | 2^16 FriOpen |
-|---|---|---|
-| ~1,500 eager per-query `MerkleTree.open` walks | batch per tree | 1.3 s → 327 ms |
-| 327 ms wall for 2.7 ms device, 4,284 launches | jit the opening zones | 327 → ~6 ms |
-| fold chain 17.4 ms wall / 3.6 ms device (2^20) | fuse the chain into one program | |
-| ~460 digest arrays + query indices crossing Python | fuse the whole tail (`fold_and_open`) | |
-| trace columns α-reduced once per opening point | share the inner reduction | ~6 → 4.3 ms |
-
-Two things that did *not* help, recorded so they are not retried: merging
-the 22 per-tree opening dispatches into one program (dispatch count had
-stopped mattering), and expecting the persistent cache to shorten the cold
-pass (it is tracing-bound, not compile-bound).
-
-### Compilation cache and the cold pass
-
-Always run with the persistent cache —
-`FRX_COMPILATION_CACHE_DIR=$HOME/.cache/pico-zorch-frxcc` — which the bench
-and profiler default to and `.bazelrc` passes through to tests. What it can
-and cannot buy: the XLA compile and per-fusion autotuning are cached across
-invocations, but the cold pass at 2^20 still costs ~60 s of Python
-tracing/lowering, dominated by `fold_chain`'s ~200 unrolled Merkle-level
-Poseidon2 bodies (distinct shapes per level, so each traces separately) —
-tracing is not cacheable by design. Shrinking it needs shape-generic level
-bodies upstream (zorch's `scan_body` machinery), not a bigger cache.
-
-A ratio against Pico is only a baseline when both sides prove the **same
-instance** with **byte-identical output** on the **same hardware** —
-sp1-zorch's rule, and it applies unchanged. Nothing here satisfies that
-against Pico's machine prover yet: its RISCV shard has a multi-chip outer
-transcript this repo does not implement. Do not quote ratios against Pico's
-published block-proving numbers from this bench; they are scope-confounded.
-Note also that Pico's open repo has no GPU code at all: the v2.0.0 prover
-is CPU (rayon), and the vendored Plonky3 fork's `gpu` feature only disables
-SIMD "for GPU interop compatibility" — the Prism CUDA prover is closed,
-shipped as Docker images on pico-ethproofs' S3 bucket
-(pico-proofs.s3.us-west-2.amazonaws.com — aggregator/subblock-worker
-images plus real block-input dumps, Prism 1.x era as of the repo's last
-guide). Those images can be run and timed on local hardware — the
-machine-level target baseline once this repo grows Pico's multi-chip outer
-transcript — but not read or byte-matched below the proof level. The open
-reference class is
-therefore CPU: the [`golden/`](../golden/) harness proves the identical
-Fibonacci instance through the fork's `p3_uni_stark::prove` (serial build —
-the grind-determinism tradeoff; a rayon build is the fairer open-CPU
-baseline at scale) and can be timed for a small-instance sanity check.
+Pico's open repo also has no GPU code — v2.0.0 proves on rayon, and the
+vendored Plonky3 fork's `gpu` feature only disables SIMD for interop with
+the closed CUDA prover. That prover ships as Docker images on
+`pico-proofs.s3.us-west-2.amazonaws.com` (aggregator / subblock-worker plus
+block-input dumps): runnable and timeable on local hardware for a
+machine-level baseline, opaque below the proof level. The open reference is
+therefore CPU — the [`golden/`](../golden/) harness proves the identical
+Fibonacci instance through the fork's `p3_uni_stark::prove`, and its serial
+build (the grind-determinism tradeoff) makes a rayon build the fairer
+open-CPU comparison at scale.

@@ -4,9 +4,9 @@
 The reference's mid-protocol slice (Plonky3 uni-stark prover.rs/verifier.rs
 at brevis-network/Plonky3@7fbe1908): sample α, evaluate the α-folded
 constraints over the disjoint coset, divide by Z_H, commit the chunked
-quotient, sample ζ. The verifier is a pure transcript replay — the algebraic
-check on the opened values (the out-of-domain identity) belongs to the
-composite, which is the first place those values exist.
+quotient, sample ζ. The verifier half is a pure transcript replay: the
+values its algebraic check would need do not exist until the opening stage
+has run, so that check belongs to the composite.
 """
 
 from __future__ import annotations
@@ -43,8 +43,11 @@ from pico_zorch.uni_stark.types import (
 
 @partial(frx.jit, static_argnames=("air", "log_n", "log_qd"))
 def _quotient_flat(air, log_n, log_qd, lde, public_values, alpha):
-    """Quotient evaluations as base columns, one program: the natural-order
-    sub-coset rows, the α-folded constraints over the coset, the Z_H divide."""
+    """Quotient evaluations as base columns.
+
+    The trace arrives as the committed (bit-reversed) LDE, whose first
+    `quotient_domain.size` rows re-reverse into exactly the natural-order
+    sub-coset — the reference's `get_evaluations_on_domain`."""
     trace_domain = Coset(log_n, fnp.ones((), F))
     quotient_domain = Coset(log_n + log_qd, fnp.array(GENERATOR, dtype=F))
     trace_on_qd = bit_reverse_rows(lde[: quotient_domain.size])

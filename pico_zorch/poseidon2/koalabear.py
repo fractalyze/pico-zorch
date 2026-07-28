@@ -1,13 +1,12 @@
 # Copyright 2026 The pico-zorch Authors. SPDX-License-Identifier: Apache-2.0
 """Pico's Poseidon2-KoalaBear-16 hash stack, on zorch's agnostic engine.
 
-Round constants are Pico's own RC_16_30 table — NOT Plonky3's default
-instance — reduced with from_wrapped_u32 and split per
+Round constants come from Pico's own RC_16_30 table, not Plonky3's default
+instance for this field, reduced with from_wrapped_u32 and split per
 pico_poseidon2kb_init(): rows 0..4 initial external, rows 4..24 column 0
-internal, rows 24..28 terminal external (rows 28..30 unused). Canonical
-values below; source of truth is
-https://github.com/brevis-network/pico/blob/v2.0.0/vm/src/primitives/mod.rs
-and the byte-match against golden/ pins them.
+internal, rows 24..28 terminal external, rows 28..30 unused. Canonical
+values below, pinned by the byte-match against golden/; the source of truth
+is https://github.com/brevis-network/pico/blob/v2.0.0/vm/src/primitives/mod.rs
 
 The Merkle stack mirrors the shapes Plonky3's `MerkleTreeMmcs` composes for
 this field: `PaddingFreeSponge<_, 16, 8, 8>` row leaves and
@@ -33,9 +32,9 @@ _WIDTH, _ER, _IR, _ALPHA = 16, 4, 20, 3
 _P = 2130706433  # KoalaBear: 2^31 - 2^24 + 1
 
 # The internal-layer diagonal [-2, 1, 2, 1/2, 3, 4, -1/2, -3, -4, 1/2^8, 1/8,
-# 1/2^24, -1/2^8, -1/8, -1/16, -1/2^24] in canonical form, using
-# p - 1 = 127 * 2^24, so -1/2^n = (p-1) >> n (the fork's INTERNAL_DIAG_MONTY_16
-# construction in koala-bear/src/poseidon2.rs).
+# 1/2^24, -1/2^8, -1/8, -1/16, -1/2^24]. The shift forms hold because
+# p - 1 = 127 * 2^24, so -1/2^n is exactly (p-1) >> n — the fork's own
+# INTERNAL_DIAG_MONTY_16 construction (koala-bear/src/poseidon2.rs).
 _INTERNAL_DIAG = [
     _P - 2,
     1,

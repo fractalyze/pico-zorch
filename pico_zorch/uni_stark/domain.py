@@ -17,7 +17,8 @@ from zorch.poly.univariate import powers
 
 
 def subgroup_gen(dtype: Any, log_n: int) -> Array:
-    """two_adic_generator(log_n): read off the same NTT the encoder uses."""
+    """two_adic_generator(log_n), read off the same NTT the encoder uses so
+    the two cannot disagree about the root."""
     if log_n == 0:
         return fnp.ones((), dtype)
     return eval_domain(dtype, 1 << log_n)[1]
@@ -57,11 +58,13 @@ class Coset:
         return [Coset(self.log_n - log_chunks, s) for s in shifts]
 
     def split_evals(self, num_chunks: int, evals: Array) -> list[Array]:
-        """Chunk i takes rows i, i+k, i+2k, … (vertically strided)."""
+        """Chunk i takes rows i, i+k, i+2k, … — strided, not contiguous, so
+        each chunk lands on one of `split_domains`' shifted cosets."""
         return [evals[i::num_chunks] for i in range(num_chunks)]
 
     def zp_at_point(self, point: Array) -> Array:
-        """Z_H(point) = (point/shift)^n − 1, unnormalized."""
+        """Z_H(point) = (point/shift)^n − 1, unnormalized as the reference
+        leaves it."""
         shift_inv = (fnp.ones((), self.shift.dtype) / self.shift).astype(point.dtype)
         x = point * shift_inv
         for _ in range(self.log_n):
@@ -102,16 +105,15 @@ class Coset:
         xs = coset.points()
         reps = coset.size >> rate_bits
         z_cycled = fnp.tile(z_evals, reps)
-        # Z_H is 2^rate_bits-periodic: invert the few distinct values, then
-        # tile — not the full coset-length array.
+        # Invert before tiling: `one / z_cycled` reads the same and costs a
+        # full coset-length inversion instead of 2^rate_bits of them.
         inv_z_cycled = fnp.tile(one / z_evals, reps)
 
         g_trace = self.gen()
         first_point = one
         last_point = one / g_trace  # g^{n-1} = g^{-1}
 
-        # One full-length inversion serves both point selectors:
-        # 1/d0 = d1/(d0·d1), 1/d1 = d0/(d0·d1).
+        # Both point selectors off one inversion: 1/d₀ = d₁/(d₀d₁).
         d_first = xs - first_point
         d_last = xs - last_point
         inv_prod = one / (d_first * d_last)
