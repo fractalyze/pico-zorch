@@ -136,6 +136,31 @@ py_binary(
     ] + GPU_PLUGIN_DEPS,
 )
 
+py_binary(
+    name = "profile_fri_open",
+    srcs = ["profile_fri_open.py"],
+    deps = [
+        ":bench_lib",
+    ] + GPU_PLUGIN_DEPS,
+)
+
+py_library(
+    name = "bench_lib",
+    srcs = ["bench_prove.py"],
+    data = ["testdata/golden/fib_prove.json"],
+    deps = [
+        ":fib_air",
+        ":prover",
+        ":types",
+        "//pico_zorch/challenger",
+        "//pico_zorch/commit:pcs_commit",
+        "//pico_zorch/poseidon2:koalabear",
+        requirement("frx"),
+        requirement("numpy"),
+        requirement("zk_dtypes"),
+    ],
+)
+
 py_library(
     name = "fib_air",
     srcs = [

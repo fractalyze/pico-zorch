@@ -13,6 +13,7 @@ the verifier checks them against the fold chain.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import partial
 
 import frx
 import frx.numpy as fnp
@@ -55,11 +56,12 @@ def eval_matrix_at(evals: Array, shift: Array, z: Array) -> Array:
     return eval_coeffs(coeffs, z / shift.astype(z.dtype))
 
 
+@partial(frx.jit, static_argnames=("opening_pos",))
 def reduced_openings(
     columns: Array,
     values: Array,
     points: Array,
-    opening_pos: list[int],
+    opening_pos: tuple[int, ...],
     alpha: Array,
     domain: Array,
 ) -> Array:
@@ -84,22 +86,33 @@ def sample_query_indices(
     return t, (canonical & ((1 << log_max_height) - 1)).astype(np.int64)
 
 
-def _observe_each(t: DuplexTranscript, values: Array) -> DuplexTranscript:
-    for value in values:
-        t = t.observe(value)
-    return t
-
-
-def _opening_pos(width: int, quotient_degree: int) -> list[int]:
+def _opening_pos(width: int, quotient_degree: int) -> tuple[int, ...]:
     """Point index per flattened column: trace at ζ, trace at ζ·g, chunks
     at ζ."""
-    return [0] * width + [1] * width + [0] * (4 * quotient_degree)
+    return (0,) * width + (1,) * width + (0,) * (4 * quotient_degree)
+
+
+@partial(frx.jit, static_argnames=("tree",))
+def _open_batch(tree: MerkleTree, leaves: Array, digest_layers, indices: Array):
+    return frx.vmap(lambda i: tree.open(leaves, digest_layers, i))(indices)
+
+
+@partial(frx.jit, static_argnames=("tree",))
+def _commit_pairs(tree: MerkleTree, pairs_base: Array):
+    return tree.commit(pairs_base)
+
+
+@partial(frx.jit, static_argnames=("code",))
+def _fold(code: BitReversedReedSolomon, folded: Array, beta: Array) -> Array:
+    return code.fold(folded, beta)
 
 
 def open_batch(tree: MerkleTree, data: CommitData, indices: Array) -> Opening:
-    """All queries' openings of one tree as a single vmapped device call — the
-    per-query eager loop was 95% of the prove's wall clock."""
-    return frx.vmap(lambda i: tree.open(data.leaves, data.digest_layers, i))(indices)
+    """All queries' openings of one tree as one jitted, vmapped device call.
+    Eager vmap dispatches every per-level gather as its own kernel (the
+    profiler read 4,284 launches for 2.7 ms of device work); the jit
+    collapses each tree's openings to a single program, cached per height."""
+    return _open_batch(tree, data.leaves, data.digest_layers, indices)
 
 
 def query_opening(batched: Opening, q: int) -> Opening:
@@ -145,9 +158,10 @@ class FriOpener(
             ]
         )
 
-        t = _observe_each(
-            transcript,
-            fnp.concatenate([trace_local, trace_next, chunk_values.reshape(-1)]),
+        # One observe of the flat value stream — byte-identical to the
+        # reference's per-element observes (the duplex buffers elementwise).
+        t = transcript.observe(
+            fnp.concatenate([trace_local, trace_next, chunk_values.reshape(-1)])
         )
         t, alpha_fri = sample_ext(t)
 
@@ -174,12 +188,13 @@ class FriOpener(
         phase_data: list[CommitData] = []
         while folded.shape[0] > (1 << log_blowup):
             pairs_base = lax.bitcast_convert_type(code.pair_leaves(folded), F)
-            root, data = commit_matrices(self.tree, [pairs_base.reshape(-1, 8)])
+            leaves = pairs_base.reshape(-1, 8)
+            root, digest_layers = _commit_pairs(self.tree, leaves)
             commit_roots.append(root)
-            phase_data.append(data)
+            phase_data.append(CommitData((leaves,), leaves, digest_layers))
             t = t.observe(root)
             t, beta = sample_ext(t)
-            folded = code.fold(folded, beta)
+            folded = _fold(code, folded, beta)
         final_poly = folded[0]
         t = t.observe(final_poly)
 
@@ -238,7 +253,7 @@ class FriOpeningVerifier(
         opened = fnp.concatenate(
             [proof.trace_local, proof.trace_next, proof.quotient_chunks.reshape(-1)]
         )
-        t = _observe_each(transcript, opened)
+        t = transcript.observe(opened)
         t, alpha_fri = sample_ext(t)
 
         betas = []

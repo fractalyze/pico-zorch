@@ -87,18 +87,19 @@ Converged warm passes, `--n_cols=32`, GPU, 84 queries:
 
 | Stage | 2^16 rows | 2^20 rows |
 |---|---|---|
-| TraceCommit | ~3.4 ms | ~9.5 ms |
-| Quotient | ~8 ms | ~13 ms |
-| FriOpen | ~229 ms | ~320 ms |
-| total | ~243 ms | ~345 ms |
+| TraceCommit | ~3.5 ms | ~9.6 ms |
+| Quotient | ~6 ms | ~13 ms |
+| FriOpen | ~6 ms | ~22 ms |
+| total | ~16 ms | ~47 ms |
 
-Query openings are one vmapped device call per tree (`open_batch`) — the
-earlier per-query eager loop cost ~1.3 s at 2^16 alone. FriOpen still
-dominates and barely grows 2^16→2^20, so its floor is host dispatch (the
-eager per-layer fold/commit/transcript loop, the grind, the OOD evals),
-not device math: jitting the fold chain into one device program (zorch's
-fusion-marker path, sp1-zorch's whole-zone jit) is the identified next
-step. The commit and quotient legs are device-bound and scale.
+The profiler (`profile_fri_open --trace_dir=...`, frx profiler + perfetto)
+is what got FriOpen here: the eager query loop first read 1.3 s at 2^16;
+batching the opens per tree still left 327 ms of wall for 2.7 ms of device
+work across 4,284 kernel launches — eager vmap dispatch, not math. Jitting
+`open_batch` (one cached program per tree height), `reduced_openings`, and
+the per-layer fold/commit calls collapsed FriOpen to single-digit ms. The
+remaining per-layer host loop (~17 sequential jit dispatches) is the next
+candidate if the fold chain ever dominates again.
 
 A ratio against Pico is only a baseline when both sides prove the **same
 instance** with **byte-identical output** on the **same hardware** —
