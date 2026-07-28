@@ -108,7 +108,11 @@ sp1-zorch's rule, and it applies unchanged. Nothing here satisfies that
 against Pico's machine prover yet: its RISCV shard has a multi-chip outer
 transcript this repo does not implement. Do not quote ratios against Pico's
 published block-proving numbers from this bench; they are scope-confounded.
-The one like-for-like reference available today is the [`golden/`](../golden/)
-harness, which proves the identical Fibonacci instance through the fork's
-`p3_uni_stark::prove` (CPU, serial build) and can be timed for a
-small-instance sanity check.
+Note also that Pico's open repo has no GPU code at all: the v2.0.0 prover
+is CPU (rayon), and the vendored Plonky3 fork's `gpu` feature only disables
+SIMD "for GPU interop compatibility" — the Prism CUDA prover is closed,
+shipped as prebuilt binaries via pico-ethproofs. The open reference class is
+therefore CPU: the [`golden/`](../golden/) harness proves the identical
+Fibonacci instance through the fork's `p3_uni_stark::prove` (serial build —
+the grind-determinism tradeoff; a rayon build is the fairer open-CPU
+baseline at scale) and can be timed for a small-instance sanity check.
