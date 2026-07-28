@@ -123,12 +123,12 @@ class FibE2eTest(absltest.TestCase):
                 np.testing.assert_array_equal(
                     got_path, want_path, err_msg=f"query {q} round {r} path"
                 )
-            for layer, (got_step, want_step) in enumerate(
+            for layer, (got_open, want_step) in enumerate(
                 zip(proof.fri.commit_phase_openings[q], want_q["commit_phase_openings"])
             ):
                 # The reference stores only the sibling; our opening holds the
                 # full pair row [8 base] = 2 extension values.
-                row = _canonical(got_step.opening.row).reshape(2, 4)
+                row = _canonical(got_open.row).reshape(2, 4)
                 want_sib = np.array(_ext(want_step["sibling_value"]))
                 # The reference stores only the sibling value; the full pair
                 # row must contain it in one of its two slots.
@@ -137,7 +137,7 @@ class FibE2eTest(absltest.TestCase):
                     msg=f"query {q} layer {layer} sibling",
                 )
                 want_path = np.array(want_step["opening_proof"])
-                got_path = np.stack([_canonical(p) for p in got_step.opening.path])
+                got_path = np.stack([_canonical(p) for p in got_open.path])
                 np.testing.assert_array_equal(
                     got_path, want_path, err_msg=f"query {q} layer {layer} path"
                 )

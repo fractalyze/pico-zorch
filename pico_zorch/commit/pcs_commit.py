@@ -16,12 +16,10 @@ from dataclasses import dataclass
 from typing import Any, Sequence
 
 import frx.numpy as fnp
-import numpy as np
-from frx import Array
-from zk_dtypes import koalabear_mont as F
+from frx import Array, lax
 
 from zorch.coding.reed_solomon import ReedSolomon
-from zorch.commit.merkle import MerkleTree, Opening
+from zorch.commit.merkle import MerkleTree
 
 # KoalaBear's multiplicative-group generator: Val::GENERATOR in the reference,
 # the coset shift for a natural (shift-1) evaluation domain.
@@ -36,19 +34,10 @@ def coset_lde(evals: Array, log_blowup: int, shift: Array) -> Array:
     return code.extend(evals.T).T
 
 
-def _bit_reverse_indices(n: int) -> np.ndarray:
-    bits = n.bit_length() - 1
-    idx = np.arange(n)
-    rev = np.zeros(n, dtype=np.int64)
-    for b in range(bits):
-        rev |= ((idx >> b) & 1) << (bits - 1 - b)
-    return rev
-
-
 def bit_reverse_rows(matrix: Array) -> Array:
     """Reference row order: row i holds the evaluation at exponent
     reverse_bits(i)."""
-    return matrix[_bit_reverse_indices(matrix.shape[0])]
+    return lax.bit_reverse(matrix, dimensions=(0,))
 
 
 @dataclass(frozen=True)
@@ -64,14 +53,15 @@ class CommitData:
 def commit_matrices(
     tree: MerkleTree, matrices: Sequence[Array]
 ) -> tuple[Array, CommitData]:
-    """One Merkle tree over equal-height matrices: leaf i is the sponge hash
-    of every matrix's row i concatenated in commit order (the reference's
+    """One Merkle tree over equal-height matrices (the reference's
     single-height MerkleTreeMmcs layout; mixed heights are out of scope for
     the Pico glue until a chip batch needs them)."""
     heights = {m.shape[0] for m in matrices}
     if len(heights) != 1:
         raise ValueError(f"matrices must share a height, got {sorted(heights)}")
-    leaves = fnp.concatenate(list(matrices), axis=1) if len(matrices) > 1 else matrices[0]
+    leaves = (
+        fnp.concatenate(list(matrices), axis=1) if len(matrices) > 1 else matrices[0]
+    )
     raw_root, digest_layers = tree.commit(leaves)
     return raw_root, CommitData(tuple(matrices), leaves, digest_layers)
 
@@ -93,13 +83,3 @@ def commit_pcs(
         bit_reverse_rows(coset_lde(e, log_blowup, s)) for e, s in zip(evals, shifts)
     ]
     return commit_matrices(tree, ldes)
-
-
-def open_rows(
-    tree: MerkleTree, data: CommitData, indices: Array
-) -> list[Opening]:
-    """Batch opening at `indices`: the concatenated leaf row plus the shared
-    path, one Opening per index (the reference's open_batch)."""
-    return [
-        tree.open(data.leaves, data.digest_layers, idx) for idx in np.asarray(indices)
-    ]

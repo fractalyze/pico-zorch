@@ -47,16 +47,6 @@ class StarkWitness:
 
 
 @dataclass(frozen=True)
-class CommitPhaseOpening:
-    """One query's step through one fold layer: the opened pair row (2
-    extension values as 8 base columns) and its Merkle path — the reference's
-    `CommitPhaseProofStep` carries the sibling value only, which is row
-    column `(index >> layer) ^ 1 & 1` here."""
-
-    opening: Opening
-
-
-@dataclass(frozen=True)
 class FriProof:
     """The reference `FriProof`: one commit per fold layer, the constant
     final polynomial, the PoW witness, and per-query openings of every
@@ -67,8 +57,10 @@ class FriProof:
     pow_witness: Array
     # Per query, per input round (trace, quotient): the leaf-row opening.
     input_openings: Sequence[Sequence[Opening]]
-    # Per query, per fold layer: the pair-row opening.
-    commit_phase_openings: Sequence[Sequence[CommitPhaseOpening]]
+    # Per query, per fold layer: the opened pair row (2 extension values as 8
+    # base columns) plus path — the reference's `CommitPhaseProofStep` carries
+    # only the sibling, row column `(index >> layer) ^ 1 & 1` here.
+    commit_phase_openings: Sequence[Sequence[Opening]]
 
 
 @dataclass(frozen=True)
