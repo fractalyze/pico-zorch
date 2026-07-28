@@ -111,7 +111,13 @@ published block-proving numbers from this bench; they are scope-confounded.
 Note also that Pico's open repo has no GPU code at all: the v2.0.0 prover
 is CPU (rayon), and the vendored Plonky3 fork's `gpu` feature only disables
 SIMD "for GPU interop compatibility" — the Prism CUDA prover is closed,
-shipped as prebuilt binaries via pico-ethproofs. The open reference class is
+shipped as Docker images on pico-ethproofs' S3 bucket
+(pico-proofs.s3.us-west-2.amazonaws.com — aggregator/subblock-worker
+images plus real block-input dumps, Prism 1.x era as of the repo's last
+guide). Those images can be run and timed on local hardware — the
+machine-level target baseline once this repo grows Pico's multi-chip outer
+transcript — but not read or byte-matched below the proof level. The open
+reference class is
 therefore CPU: the [`golden/`](../golden/) harness proves the identical
 Fibonacci instance through the fork's `p3_uni_stark::prove` (serial build —
 the grind-determinism tradeoff; a rayon build is the fairer open-CPU
