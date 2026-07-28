@@ -32,7 +32,6 @@ from pico_zorch.uni_stark.bench_prove import _block, _WideFibAir
 from pico_zorch.uni_stark.fri_stage import (
     _bitrev_lde_domain,
     _open_head,
-    _opening_pos,
     fold_chain,
     open_batch,
     sample_query_indices,
@@ -69,7 +68,8 @@ def _one_pass(tree, trace, trace_data, claim, quotient, t, n, n_cols, params):
             claim.zeta,
             claim.zeta_next,
             t,
-            _opening_pos(n_cols, len(quotient.chunks)),
+            n_cols,
+            len(quotient.chunks),
             _bitrev_lde_domain(lde_height),
         )
     tm.lap("open_head(ood+obs+ro)", (ro, tt.state.sponge_state))

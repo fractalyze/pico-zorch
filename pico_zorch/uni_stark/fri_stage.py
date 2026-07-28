@@ -55,7 +55,53 @@ def _eval_columns(coeffs: Array, y: Array) -> Array:
     return (coeffs.astype(y.dtype) * ypow[None, :]).sum(axis=-1)
 
 
-@partial(frx.jit, static_argnames=("opening_pos",))
+@partial(frx.jit, static_argnames=("width", "quotient_degree"))
+def reduced_openings(
+    trace_leaves: Array,
+    quotient_leaves: Array,
+    opened: Array,
+    zeta: Array,
+    zeta_next: Array,
+    alpha: Array,
+    domain: Array,
+    width: int,
+    quotient_degree: int,
+) -> Array:
+    """The reference's α-batched opening reduction:
+    Σ_m α^m·(value_m − col_m(X))/(z_m − X), α powers running consecutively
+    because each round's offset is the running column count.
+
+    Two departures from a literal transcription, both field-identical:
+
+    The trace is opened at ζ and ζ·g, which the reference walks as two
+    rounds over the *same* columns with offsets α^0 and α^w — so its inner
+    α-weighted column sum is computed once here and shared. Likewise the
+    quotient chunks' per-chunk offsets (α^{2w+4i}) times their inner powers
+    (α^j) collapse to one consecutive run α^{2w+k}.
+
+    The two point quotients then merge over a single inversion:
+    n₀/d₀ + n₁/d₁ = (n₀d₁ + n₁d₀)/(d₀d₁)."""
+    ap = powers(alpha, 2 * width + 4 * quotient_degree)
+    trace_cols = trace_leaves.astype(EF)
+    quotient_cols = quotient_leaves.astype(EF)
+
+    def dot(coeffs: Array, cols: Array) -> Array:
+        return (cols * coeffs[None, :]).sum(axis=-1)
+
+    trace_red = dot(ap[:width], trace_cols)
+    q_red = dot(ap[2 * width :], quotient_cols)
+    y_local = (ap[:width] * opened[:width]).sum()
+    y_next = (ap[:width] * opened[width : 2 * width]).sum()
+    y_quotient = (ap[2 * width :] * opened[2 * width :]).sum()
+
+    n_zeta = (y_local - trace_red) + (y_quotient - q_red)
+    n_next = ap[width] * (y_next - trace_red)
+    d_zeta = zeta - domain.astype(EF)
+    d_next = zeta_next - domain.astype(EF)
+    return (n_zeta * d_next + n_next * d_zeta) / (d_zeta * d_next)
+
+
+@partial(frx.jit, static_argnames=("width", "quotient_degree"))
 def _open_head(
     trace,
     chunks,
@@ -65,7 +111,8 @@ def _open_head(
     zeta,
     zeta_next,
     transcript,
-    opening_pos,
+    width,
+    quotient_degree,
     domain,
 ):
     """OOD values -> observe -> α -> reduced openings, one device program."""
@@ -76,20 +123,23 @@ def _open_head(
     t = transcript.observe(opened)
     t, alpha_fri = sample_ext(t)
     ro = reduced_openings(
-        fnp.concatenate([trace_leaves, trace_leaves, quotient_leaves], axis=1),
+        trace_leaves,
+        quotient_leaves,
         opened,
-        fnp.stack([zeta, zeta_next]),
-        opening_pos,
+        zeta,
+        zeta_next,
         alpha_fri,
         domain,
+        width,
+        quotient_degree,
     )
     return trace_local, trace_next, chunk_values, ro, t
 
 
 def _ood_values(trace, chunks, chunk_shifts, zeta, zeta_next):
-    """All out-of-domain values in one program; the trace interpolates once
-    for both ζ and ζ·g. Interpolation is on the plain subgroup (coefficients
-    of p̃(y) = p(shift·y)), evaluation at y = z/shift — field-identical to the
+    """All out-of-domain values; the trace interpolates once for both ζ and
+    ζ·g. Interpolation is on the plain subgroup (coefficients of
+    p̃(y) = p(shift·y)), evaluation at y = z/shift — field-identical to the
     reference's barycentric `interpolate_coset`."""
     n = trace.shape[0]
     coeffs = lax.ntt(trace.T, ntt_type="INTT", ntt_length=n)
@@ -107,45 +157,6 @@ def _ood_values(trace, chunks, chunk_shifts, zeta, zeta_next):
     return trace_local, trace_next, chunk_values
 
 
-@partial(frx.jit, static_argnames=("opening_pos",))
-def reduced_openings(
-    columns: Array,
-    values: Array,
-    points: Array,
-    opening_pos: tuple[int, ...],
-    alpha: Array,
-    domain: Array,
-) -> Array:
-    """The reference's α-batched opening reduction — zorch's DEEP-ALI
-    composition (the per-(matrix, point) α offsets flatten to consecutive
-    powers because each offset is the running column count), with the
-    per-point quotients merged over ONE inversion:
-    Σ_o n_o/(z_o − X) = (Σ_o n_o·Π_{j≠o} d_j) / Π_o d_o. Field-identical to
-    `zorch.pcs.deep.deep_composition`, which inverts once per point —
-    upstream candidate."""
-    m = columns.shape[1]
-    alpha_pows = powers(alpha, m)
-    numer: dict[int, Array] = {}
-    for col in range(m):
-        term = alpha_pows[col] * (values[col] - columns[:, col].astype(EF))
-        o = opening_pos[col]
-        numer[o] = term if o not in numer else numer[o] + term
-    keys = sorted(numer)
-    denoms = [points[o] - domain.astype(EF) for o in keys]
-    prod = denoms[0]
-    for d in denoms[1:]:
-        prod = prod * d
-    total = None
-    for i, o in enumerate(keys):
-        others = None
-        for j, d in enumerate(denoms):
-            if j != i:
-                others = d if others is None else others * d
-        term = numer[o] if others is None else numer[o] * others
-        total = term if total is None else total + term
-    return total / prod
-
-
 def sample_query_indices(
     transcript: DuplexTranscript, log_max_height: int, count: int
 ) -> tuple[DuplexTranscript, np.ndarray]:
@@ -157,15 +168,77 @@ def sample_query_indices(
     return t, (canonical & ((1 << log_max_height) - 1)).astype(np.int64)
 
 
-def _opening_pos(width: int, quotient_degree: int) -> tuple[int, ...]:
-    """Point index per flattened column: trace at ζ, trace at ζ·g, chunks
-    at ζ."""
-    return (0,) * width + (1,) * width + (0,) * (4 * quotient_degree)
-
-
 @partial(frx.jit, static_argnames=("tree",))
 def _open_batch(tree: MerkleTree, leaves: Array, digest_layers, indices: Array):
     return frx.vmap(lambda i: tree.open(leaves, digest_layers, i))(indices)
+
+
+@partial(frx.jit, static_argnames=("tree", "num_layers"))
+def _open_all(tree: MerkleTree, trees, indices: Array, num_layers: int):
+    """Every tree's query openings in one program: the input trees at the
+    query index, then fold layer `l` at `index >> (l+1)`. One dispatch
+    instead of one per tree."""
+    (trace_leaves, trace_digests), (q_leaves, q_digests), *layers = trees
+    opens = [
+        frx.vmap(lambda i: tree.open(trace_leaves, trace_digests, i))(indices),
+        frx.vmap(lambda i: tree.open(q_leaves, q_digests, i))(indices),
+    ]
+    for layer, (leaves, digests) in enumerate(layers):
+        idx = indices >> (layer + 1)
+        opens.append(frx.vmap(lambda i: tree.open(leaves, digests, i))(idx))
+    return tuple(opens)
+
+
+@partial(
+    frx.jit,
+    static_argnames=(
+        "tree",
+        "code",
+        "log_blowup",
+        "pow_bits",
+        "num_queries",
+        "log_max_height",
+    ),
+)
+def fold_and_open(
+    tree: MerkleTree,
+    code: BitReversedReedSolomon,
+    log_blowup: int,
+    pow_bits: int,
+    num_queries: int,
+    log_max_height: int,
+    ro: Array,
+    transcript: DuplexTranscript,
+    trace_leaves: Array,
+    trace_digests,
+    quotient_leaves: Array,
+    quotient_digests,
+):
+    """The whole opening tail as one device program: fold chain, final-poly
+    observe, grind, query sampling, and every tree's openings.
+
+    Fusing past the fold chain is what keeps the ~460 per-layer digest
+    arrays and the query indices off the Python boundary — marshalling them
+    cost more than the kernels did."""
+    final_poly, roots, layers, t = fold_chain(
+        tree, code, log_blowup, ro, transcript
+    )
+    t, pow_witness = t.grind(pow_bits)
+    t, raw = t.sample(num_queries)
+    idx = (
+        lax.convert_element_type(raw, fnp.uint32) & fnp.uint32((1 << log_max_height) - 1)
+    ).astype(fnp.int32)
+
+    def opens_at(leaves, digests, indices):
+        return frx.vmap(lambda i: tree.open(leaves, digests, i))(indices)
+
+    trace_open = opens_at(trace_leaves, trace_digests, idx)
+    quotient_open = opens_at(quotient_leaves, quotient_digests, idx)
+    layer_opens = tuple(
+        opens_at(leaves, digests, idx >> (layer + 1))
+        for layer, (leaves, digests) in enumerate(layers)
+    )
+    return final_poly, roots, pow_witness, trace_open, quotient_open, layer_opens, t
 
 
 @partial(frx.jit, static_argnames=("tree", "code", "log_blowup"))
@@ -249,7 +322,8 @@ class FriOpener(
             claim.zeta,
             claim.zeta_next,
             transcript,
-            _opening_pos(width, quotient_degree),
+            width,
+            quotient_degree,
             _bitrev_lde_domain(lde_height),
         )
 
@@ -268,6 +342,13 @@ class FriOpener(
         )
 
         idx = fnp.asarray(indices.astype(np.int32))
+        trees = tuple(
+            (d.leaves, tuple(d.digest_layers))
+            for d in (witness.trace_data, quotient.quotient_data, *phase_data)
+        )
+        trace_open, quotient_open, *layer_opens = _open_all(
+            self.tree, trees, idx, len(phase_data)
+        )
         proof = FriOpeningProof(
             trace_local=trace_local,
             trace_next=trace_next,
@@ -276,14 +357,9 @@ class FriOpener(
                 commit_phase_roots=commit_roots,
                 final_poly=final_poly,
                 pow_witness=pow_witness,
-                trace_openings=open_batch(self.tree, witness.trace_data, idx),
-                quotient_openings=open_batch(
-                    self.tree, quotient.quotient_data, idx
-                ),
-                commit_phase_openings=[
-                    open_batch(self.tree, data, (idx >> (layer + 1)))
-                    for layer, data in enumerate(phase_data)
-                ],
+                trace_openings=trace_open,
+                quotient_openings=quotient_open,
+                commit_phase_openings=list(layer_opens),
             ),
         )
         return ProveResult(TrivialClaim(), proof, t)
@@ -337,8 +413,6 @@ class FriOpeningVerifier(
         t, indices = sample_query_indices(t, log_max_height, params.num_queries)
 
         xs_br = _bitrev_lde_domain(lde_height)
-        points = fnp.stack([claim.zeta, claim.zeta_next])
-        opening_pos = _opening_pos(width, quotient_degree)
         code = BitReversedReedSolomon(1 << claim.degree_bits, 1 << log_blowup, F)
 
         if proof.fri.trace_openings.row.shape != (
@@ -359,11 +433,16 @@ class FriOpeningVerifier(
                 self.tree.reconstruct_root(idx, quotient_open), claim.quotient_root
             )
 
-            columns = fnp.concatenate(
-                [trace_open.row, trace_open.row, quotient_open.row]
-            )[None, :]
             value = reduced_openings(
-                columns, opened, points, opening_pos, alpha_fri, xs_br[idx : idx + 1]
+                trace_open.row[None, :],
+                quotient_open.row[None, :],
+                opened,
+                claim.zeta,
+                claim.zeta_next,
+                alpha_fri,
+                xs_br[idx : idx + 1],
+                width,
+                quotient_degree,
             )[0]
 
             for layer, batched in enumerate(proof.fri.commit_phase_openings):

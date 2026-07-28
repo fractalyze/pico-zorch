@@ -25,6 +25,7 @@ Run (CPU is the default; pin an idle GPU for real numbers):
 from __future__ import annotations
 
 import argparse
+import contextlib
 import dataclasses
 import json
 import os
@@ -109,6 +110,7 @@ def main() -> None:
     parser.add_argument("--n_cols", type=int, default=2)
     parser.add_argument("--runs", type=int, default=5)
     parser.add_argument("--num_queries", type=int, default=84)
+    parser.add_argument("--trace_dir", type=str, default="")
     args = parser.parse_args()
     if args.n_cols < 2:
         raise ValueError("n_cols must be >= 2 (Fibonacci occupies columns 0-1)")
@@ -134,29 +136,40 @@ def main() -> None:
 
         for run in range(args.runs):
             print(f" pass {run + 1}:")
+            ctx = (
+                frx.profiler.trace(args.trace_dir, create_perfetto_trace=True)
+                if args.trace_dir and run == args.runs - 1
+                else contextlib.nullcontext()
+            )
             start = time.perf_counter()
-            trace_root, trace_data = _timed(
-                "TraceCommit",
-                lambda: commit_pcs(tree, [trace], params.log_blowup),
-            )
-            t = bind_instance(fresh_challenger(), degree_bits, trace_root, pv)
-            quotient = _timed(
-                "Quotient",
-                lambda: QuotientProver(tree, params).prove(
-                    QuotientClaim(air, pv, degree_bits, trace_root),
-                    QuotientWitness(trace, trace_data),
-                    t,
-                ),
-            )
-            opening = _timed(
-                "FriOpen",
-                lambda: FriOpener(tree, params).prove(
-                    quotient.reduced_claim,
-                    FriOpeningWitness(trace, trace_data, quotient.reduction_proof.data),
-                    quotient.transcript,
-                ),
-            )
-            del opening
+            with ctx:
+                with frx.profiler.TraceAnnotation("TraceCommit"):
+                    trace_root, trace_data = _timed(
+                        "TraceCommit",
+                        lambda: commit_pcs(tree, [trace], params.log_blowup),
+                    )
+                t = bind_instance(fresh_challenger(), degree_bits, trace_root, pv)
+                with frx.profiler.TraceAnnotation("Quotient"):
+                    quotient = _timed(
+                        "Quotient",
+                        lambda: QuotientProver(tree, params).prove(
+                            QuotientClaim(air, pv, degree_bits, trace_root),
+                            QuotientWitness(trace, trace_data),
+                            t,
+                        ),
+                    )
+                with frx.profiler.TraceAnnotation("FriOpen"):
+                    opening = _timed(
+                        "FriOpen",
+                        lambda: FriOpener(tree, params).prove(
+                            quotient.reduced_claim,
+                            FriOpeningWitness(
+                                trace, trace_data, quotient.reduction_proof.data
+                            ),
+                            quotient.transcript,
+                        ),
+                    )
+                del opening
             print(f"  [total] {(time.perf_counter() - start) * 1e3:.1f}ms")
             if is_golden_config:
                 _check_golden(trace_root, quotient)
