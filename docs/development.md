@@ -73,6 +73,25 @@ Every element of that invocation earns its place:
   any number; a phase whose spread is a large fraction of its value is not
   evidence in either direction from a single pass.
 
+### Baseline
+
+Converged warm passes, RTX 5090, `--n_cols=32`, 84 queries — the numbers a
+run should be compared against before believing any change is neutral. A
+reuse that looked free (reading a domain off a freshly constructed coset
+code, which eagerly builds a block-length powers table) cost FriOpen 20-40%
+and was caught exactly this way.
+
+| Stage | 2^16 rows | 2^20 rows |
+|---|---|---|
+| TraceCommit | 0.8–1.1 ms | 8.1–8.2 ms |
+| Quotient | 1.5–1.9 ms | 3.1–3.3 ms |
+| FriOpen | 3.4–4.1 ms | 8.2–8.9 ms |
+| total | 7.1–8.6 ms | 21.4–22.6 ms |
+
+Re-measure rather than trusting the table across a zorch pin or frx wheel
+bump; TraceCommit in particular throws 11–20 ms outliers when the card is
+shared, so an outlier is a contention signal, not a regression.
+
 ### What a number here does and does not mean
 
 At `--degree_bits=3 --n_cols=2` with default FRI params the run checks its
