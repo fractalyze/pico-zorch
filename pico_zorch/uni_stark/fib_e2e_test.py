@@ -64,15 +64,15 @@ class FibE2eTest(absltest.TestCase):
     def test_opened_values(self) -> None:
         proof = self.result.reduction_proof
         want = self.golden["proof"]["opened_values"]
-        got_local = _canonical(lax.bitcast_convert_type(proof.trace_local, F))
-        got_next = _canonical(lax.bitcast_convert_type(proof.trace_next, F))
+        got_local = _canonical(lax.bitcast_convert_type(proof.opening.trace_local, F))
+        got_next = _canonical(lax.bitcast_convert_type(proof.opening.trace_next, F))
         np.testing.assert_array_equal(
             got_local, np.array([_ext(v) for v in want["trace_local"]])
         )
         np.testing.assert_array_equal(
             got_next, np.array([_ext(v) for v in want["trace_next"]])
         )
-        got_chunks = _canonical(lax.bitcast_convert_type(proof.quotient_chunks, F))
+        got_chunks = _canonical(lax.bitcast_convert_type(proof.opening.quotient_chunks, F))
         want_chunks = np.array(
             [[_ext(v) for v in chunk] for chunk in want["quotient_chunks"]]
         )
@@ -82,20 +82,20 @@ class FibE2eTest(absltest.TestCase):
         proof = self.result.reduction_proof
         want = self.golden["proof"]["opening_proof"]
         self.assertEqual(
-            len(proof.fri.commit_phase_roots), len(want["commit_phase_commits"])
+            len(proof.opening.fri.commit_phase_roots), len(want["commit_phase_commits"])
         )
         for got_root, want_root in zip(
-            proof.fri.commit_phase_roots, want["commit_phase_commits"]
+            proof.opening.fri.commit_phase_roots, want["commit_phase_commits"]
         ):
             np.testing.assert_array_equal(
                 _canonical(got_root), np.array(want_root["value"])
             )
         np.testing.assert_array_equal(
-            _canonical(lax.bitcast_convert_type(proof.fri.final_poly, F)),
+            _canonical(lax.bitcast_convert_type(proof.opening.fri.final_poly, F)),
             np.array(_ext(want["final_poly"])),
         )
         self.assertEqual(
-            int(_canonical(proof.fri.pow_witness)[()]), want["pow_witness"]
+            int(_canonical(proof.opening.fri.pow_witness)[()]), want["pow_witness"]
         )
 
     def test_query_openings(self) -> None:
@@ -107,10 +107,10 @@ class FibE2eTest(absltest.TestCase):
         want_queries = opening_proof["query_proofs"]
         stored_indices = opening_proof["stored_query_indices"]
         self.assertEqual(
-            len(proof.fri.input_openings), self.golden["fri_config"]["num_queries"]
+            len(proof.opening.fri.input_openings), self.golden["fri_config"]["num_queries"]
         )
         for q, want_q in zip(stored_indices, want_queries):
-            got_rounds = proof.fri.input_openings[q]
+            got_rounds = proof.opening.fri.input_openings[q]
             want_rounds = want_q["input_proof"]
             for r, (got, want_r) in enumerate(zip(got_rounds, want_rounds)):
                 # opened_values: one matrix per round -> [row].
@@ -124,7 +124,7 @@ class FibE2eTest(absltest.TestCase):
                     got_path, want_path, err_msg=f"query {q} round {r} path"
                 )
             for layer, (got_open, want_step) in enumerate(
-                zip(proof.fri.commit_phase_openings[q], want_q["commit_phase_openings"])
+                zip(proof.opening.fri.commit_phase_openings[q], want_q["commit_phase_openings"])
             ):
                 # The reference stores only the sibling; our opening holds the
                 # full pair row [8 base] = 2 extension values.

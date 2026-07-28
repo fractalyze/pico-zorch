@@ -1,11 +1,12 @@
 # Copyright 2026 The pico-zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""Claims, witnesses and proof wire types for the uni-stark stage.
+"""Claims, witnesses and proof wire types for the uni-stark stages.
 
-Mirrors the reference `Proof` (Plonky3 uni-stark/src/proof.rs at
-brevis-network/Plonky3@7fbe1908): commitments, out-of-domain opened values,
-the FRI opening proof, and the trace's log height. Field arrays carry raw
-Montgomery u32 (`koalabear_mont` views); the canonical form appears only on
-comparison and serialization surfaces.
+The claim chain mirrors the reference protocol's two reductions:
+`QuotientClaim` (the AIR holds on the committed trace) reduces to
+`TraceOpeningClaim` (the committed polynomials open to consistent values at
+ζ and ζ·g), which the FRI opening reduces to `TrivialClaim`. Reduced claims
+are execution values, never serialized; field arrays carry raw Montgomery
+u32, canonical form appears only on comparison surfaces.
 """
 
 from __future__ import annotations
@@ -17,7 +18,9 @@ from frx import Array
 
 from zorch.commit.merkle import Opening
 
+from pico_zorch.commit.pcs_commit import CommitData
 from pico_zorch.uni_stark.air import Air
+from pico_zorch.uni_stark.domain import Coset
 
 
 @dataclass(frozen=True)
@@ -47,6 +50,71 @@ class StarkWitness:
 
 
 @dataclass(frozen=True)
+class QuotientClaim:
+    """`StarkClaim` with its trace commitment bound — the quotient stage's
+    input, formed by the composite after `bind_instance`."""
+
+    air: Air
+    public_values: Array
+    degree_bits: int
+    trace_root: Array
+
+
+@dataclass(frozen=True)
+class QuotientWitness:
+    """The trace plus its commit data (the LDE the quotient is evaluated
+    on, and later the FRI opening's oracle)."""
+
+    trace: Array
+    trace_data: CommitData
+
+
+@dataclass(frozen=True)
+class TraceOpeningClaim:
+    """The quotient stage's reduced claim: the committed trace and quotient
+    polynomials open at ζ (trace also at ζ·g) to values that satisfy the
+    out-of-domain identity under α."""
+
+    trace_root: Array
+    quotient_root: Array
+    alpha: Array
+    zeta: Array
+    zeta_next: Array
+    degree_bits: int
+
+
+@dataclass(frozen=True)
+class QuotientData:
+    """Prover-only quotient stage output, the FRI opening's witness half:
+    chunk evaluations, their domains, and the commit data."""
+
+    chunks: Sequence[Array]
+    qc_domains: Sequence[Coset]
+    quotient_data: CommitData
+
+
+@dataclass(frozen=True)
+class QuotientProof:
+    """The quotient stage's reduction proof. Only `quotient_root` is wire;
+    `data` is prover-only (the FRI opening's witness half, zisk-zorch's
+    `TraceCommitment` convention), absent on the verifier path and never
+    serialized."""
+
+    quotient_root: Array
+    data: QuotientData | None = None
+
+
+@dataclass(frozen=True)
+class FriOpeningWitness:
+    """Everything the FRI opening interpolates and opens: the natural-order
+    evaluations and both commitments' prover data."""
+
+    trace: Array
+    trace_data: CommitData
+    quotient: QuotientData
+
+
+@dataclass(frozen=True)
 class FriProof:
     """The reference `FriProof`: one commit per fold layer, the constant
     final polynomial, the PoW witness, and per-query openings of every
@@ -64,11 +132,22 @@ class FriProof:
 
 
 @dataclass(frozen=True)
-class StarkProof:
-    trace_root: Array
-    quotient_root: Array
+class FriOpeningProof:
+    """The opening stage's wire message: the out-of-domain opened values and
+    the FRI low-degree proof (the reference's `OpenedValues` +
+    `opening_proof`)."""
+
     trace_local: Array  # [width] extension
     trace_next: Array  # [width] extension
     quotient_chunks: Array  # [quotient_degree, 4] extension per base limb
     fri: FriProof
+
+
+@dataclass(frozen=True)
+class StarkProof:
+    """The composite wire proof, the reference `Proof` field for field."""
+
+    trace_root: Array
+    quotient_root: Array
+    opening: FriOpeningProof
     degree_bits: int

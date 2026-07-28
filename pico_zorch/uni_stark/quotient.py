@@ -22,6 +22,11 @@ from pico_zorch.uni_stark.air import Air
 from pico_zorch.uni_stark.domain import Coset
 
 
+def log_quotient_degree(constraint_degree: int) -> int:
+    """ceil(log2(constraint_degree − 1)) — the reference's quotient blowup."""
+    return (max(constraint_degree - 1, 1) - 1).bit_length()
+
+
 def quotient_values(
     air: Air,
     public_values: Array,

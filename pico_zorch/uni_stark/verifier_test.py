@@ -62,8 +62,12 @@ class VerifierTest(absltest.TestCase):
 
     def test_tampered_opened_value_fails(self) -> None:
         proof = self.result.reduction_proof
-        bumped = proof.trace_local + fnp.ones((), proof.trace_local.dtype)
-        tampered = dataclasses.replace(proof, trace_local=bumped)
+        bumped = proof.opening.trace_local + fnp.ones(
+            (), proof.opening.trace_local.dtype
+        )
+        tampered = dataclasses.replace(
+            proof, opening=dataclasses.replace(proof.opening, trace_local=bumped)
+        )
         verifier = StarkVerifier(tree=self.tree, params=_PARAMS)
         out = verifier.verify(self.claim, tampered, fresh_challenger())
         self.assertFalse(bool(out.ok))

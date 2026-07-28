@@ -53,7 +53,11 @@ py_library(
 
 py_library(
     name = "prover",
-    srcs = ["prover.py"],
+    srcs = [
+        "fri_stage.py",
+        "prover.py",
+        "quotient_stage.py",
+    ],
     visibility = ["//visibility:public"],
     deps = [
         ":air",

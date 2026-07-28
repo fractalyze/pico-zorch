@@ -34,10 +34,18 @@ config (log_blowup 1, 84 queries, 16 PoW bits):
 | TwoAdicFriPcs commit (coset LDE, bit-reversed MMCS) | [`pico_zorch/commit/`](pico_zorch/commit/) | trace LDE + Merkle root |
 | Quotient, FRI open, prover/verifier stages | [`pico_zorch/uni_stark/`](pico_zorch/uni_stark/) | the complete `p3_uni_stark::prove` proof |
 
-The prover is `StarkProver`, a zorch
-`ProverStage[StarkClaim, StarkWitness, TrivialClaim, StarkProof,
-DuplexTranscript]`; `StarkVerifier` is its explicit dual and ends on the
-prover's exact sponge state. Not yet covered: Pico's machine-level prover
+The pipeline is a zorch claim-reduction chain:
+
+```
+StarkClaim ──(quotient stage: α, quotient commit, ζ)──▶ TraceOpeningClaim
+           ──(FRI opening: values, α_fri, folds, grind, queries)──▶ TrivialClaim
+```
+
+`StarkProver` composes `QuotientProver` and `FriOpener`; `StarkVerifier`
+chains their duals and closes with the out-of-domain identity, ending on the
+prover's exact sponge state. Committing the trace precedes the chain (not a
+transcript operation); prover-only commit data rides witnesses, never
+claims. Not yet covered: Pico's machine-level prover
 (the multi-chip outer transcript with permutation traces — `p3_uni_stark`
 validates every layer beneath it), bincode wire serialization, and
 GPU-scale shards.
