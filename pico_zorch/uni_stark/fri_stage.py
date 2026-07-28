@@ -24,7 +24,6 @@ from zk_dtypes import koalabearx4_mont as EF
 
 from zorch.coding.reed_solomon import BitReversedReedSolomon, eval_domain
 from zorch.commit.merkle import MerkleTree, Opening
-from zorch.pcs.deep import deep_composition
 from zorch.poly.univariate import powers
 from zorch.stage import (
     ProveResult,
@@ -56,8 +55,38 @@ def _eval_columns(coeffs: Array, y: Array) -> Array:
     return (coeffs.astype(y.dtype) * ypow[None, :]).sum(axis=-1)
 
 
-@frx.jit
-def _ood_open(trace, chunks, chunk_shifts, zeta, zeta_next):
+@partial(frx.jit, static_argnames=("opening_pos",))
+def _open_head(
+    trace,
+    chunks,
+    chunk_shifts,
+    trace_leaves,
+    quotient_leaves,
+    zeta,
+    zeta_next,
+    transcript,
+    opening_pos,
+    domain,
+):
+    """OOD values -> observe -> α -> reduced openings, one device program."""
+    trace_local, trace_next, chunk_values = _ood_values(
+        trace, chunks, chunk_shifts, zeta, zeta_next
+    )
+    opened = fnp.concatenate([trace_local, trace_next, chunk_values.reshape(-1)])
+    t = transcript.observe(opened)
+    t, alpha_fri = sample_ext(t)
+    ro = reduced_openings(
+        fnp.concatenate([trace_leaves, trace_leaves, quotient_leaves], axis=1),
+        opened,
+        fnp.stack([zeta, zeta_next]),
+        opening_pos,
+        alpha_fri,
+        domain,
+    )
+    return trace_local, trace_next, chunk_values, ro, t
+
+
+def _ood_values(trace, chunks, chunk_shifts, zeta, zeta_next):
     """All out-of-domain values in one program; the trace interpolates once
     for both ζ and ζ·g. Interpolation is on the plain subgroup (coefficients
     of p̃(y) = p(shift·y)), evaluation at y = z/shift — field-identical to the
@@ -87,14 +116,34 @@ def reduced_openings(
     alpha: Array,
     domain: Array,
 ) -> Array:
-    """The reference's α-batched opening reduction, which is zorch's DEEP-ALI
-    composition: Σ_m α^m·(col_m − values[m])/(domain − points[pos_m]). The
-    reference's per-(matrix, point) α offsets flatten to consecutive powers
-    because each offset is the running column count."""
-    ext_none = fnp.zeros((columns.shape[0], 0), dtype=EF)
-    return deep_composition(
-        columns, ext_none, values, points, opening_pos, alpha, domain
-    )
+    """The reference's α-batched opening reduction — zorch's DEEP-ALI
+    composition (the per-(matrix, point) α offsets flatten to consecutive
+    powers because each offset is the running column count), with the
+    per-point quotients merged over ONE inversion:
+    Σ_o n_o/(z_o − X) = (Σ_o n_o·Π_{j≠o} d_j) / Π_o d_o. Field-identical to
+    `zorch.pcs.deep.deep_composition`, which inverts once per point —
+    upstream candidate."""
+    m = columns.shape[1]
+    alpha_pows = powers(alpha, m)
+    numer: dict[int, Array] = {}
+    for col in range(m):
+        term = alpha_pows[col] * (values[col] - columns[:, col].astype(EF))
+        o = opening_pos[col]
+        numer[o] = term if o not in numer else numer[o] + term
+    keys = sorted(numer)
+    denoms = [points[o] - domain.astype(EF) for o in keys]
+    prod = denoms[0]
+    for d in denoms[1:]:
+        prod = prod * d
+    total = None
+    for i, o in enumerate(keys):
+        others = None
+        for j, d in enumerate(denoms):
+            if j != i:
+                others = d if others is None else others * d
+        term = numer[o] if others is None else numer[o] * others
+        total = term if total is None else total + term
+    return total / prod
 
 
 def sample_query_indices(
@@ -190,35 +239,17 @@ class FriOpener(
         quotient = witness.quotient
         quotient_degree = len(quotient.chunks)
 
-        trace_local, trace_next, chunk_values = _ood_open(
+        lde_height = n << log_blowup
+        trace_local, trace_next, chunk_values, ro, t = _open_head(
             witness.trace,
             tuple(quotient.chunks),
             tuple(d.shift for d in quotient.qc_domains),
+            witness.trace_data.leaves,
+            quotient.quotient_data.leaves,
             claim.zeta,
             claim.zeta_next,
-        )
-
-        # One observe of the flat value stream — byte-identical to the
-        # reference's per-element observes (the duplex buffers elementwise).
-        t = transcript.observe(
-            fnp.concatenate([trace_local, trace_next, chunk_values.reshape(-1)])
-        )
-        t, alpha_fri = sample_ext(t)
-
-        lde_height = n << log_blowup
-        ro = reduced_openings(
-            fnp.concatenate(
-                [
-                    witness.trace_data.leaves,
-                    witness.trace_data.leaves,
-                    quotient.quotient_data.leaves,
-                ],
-                axis=1,
-            ),
-            fnp.concatenate([trace_local, trace_next, chunk_values.reshape(-1)]),
-            fnp.stack([claim.zeta, claim.zeta_next]),
+            transcript,
             _opening_pos(width, quotient_degree),
-            alpha_fri,
             _bitrev_lde_domain(lde_height),
         )
 

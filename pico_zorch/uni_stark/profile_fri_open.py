@@ -31,11 +31,10 @@ from pico_zorch.poseidon2.koalabear import koalabear16_merkle
 from pico_zorch.uni_stark.bench_prove import _block, _WideFibAir
 from pico_zorch.uni_stark.fri_stage import (
     _bitrev_lde_domain,
-    _ood_open,
+    _open_head,
     _opening_pos,
     fold_chain,
     open_batch,
-    reduced_openings,
     sample_query_indices,
 )
 from pico_zorch.uni_stark.prover import bind_instance
@@ -59,36 +58,21 @@ def _one_pass(tree, trace, trace_data, claim, quotient, t, n, n_cols, params):
     tm = _Timer()
     one = fnp.ones((), F)
 
-    with frx.profiler.TraceAnnotation("ood_evals"):
-        trace_local, trace_next, chunk_values = _ood_open(
+    lde_height = n << params.log_blowup
+    with frx.profiler.TraceAnnotation("open_head"):
+        trace_local, trace_next, chunk_values, ro, tt = _open_head(
             trace,
             tuple(quotient.chunks),
             tuple(d.shift for d in quotient.qc_domains),
+            trace_data.leaves,
+            quotient.quotient_data.leaves,
             claim.zeta,
             claim.zeta_next,
-        )
-    tm.lap("ood_evals", (trace_local, trace_next, chunk_values))
-
-    opened = fnp.concatenate([trace_local, trace_next, chunk_values.reshape(-1)])
-    with frx.profiler.TraceAnnotation("observe_opened"):
-        tt = t.observe(opened)
-        tt, alpha_fri = sample_ext(tt)
-    tm.lap(f"observe_opened[{opened.shape[0]}]", (tt.state.sponge_state, alpha_fri))
-
-    lde_height = n << params.log_blowup
-    with frx.profiler.TraceAnnotation("reduced_openings"):
-        ro = reduced_openings(
-            fnp.concatenate(
-                [trace_data.leaves, trace_data.leaves, quotient.quotient_data.leaves],
-                axis=1,
-            ),
-            opened,
-            fnp.stack([claim.zeta, claim.zeta_next]),
+            t,
             _opening_pos(n_cols, len(quotient.chunks)),
-            alpha_fri,
             _bitrev_lde_domain(lde_height),
         )
-    tm.lap("reduced_openings", ro)
+    tm.lap("open_head(ood+obs+ro)", (ro, tt.state.sponge_state))
 
     from pico_zorch.commit.pcs_commit import CommitData
 
