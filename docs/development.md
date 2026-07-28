@@ -81,6 +81,27 @@ FRI legs scale with the real width, but the quotient leg keeps Fibonacci's
 5-constraint load — its absolute time is a lower bound for a real AIR of
 that width, and only its *size* scaling is meaningful.
 
+### First numbers (2026-07-28, RTX 5090, zorch @7e7541d, frx dev20260725)
+
+Converged warm passes, `--degree_bits=16 --n_cols=32 --runs=4`, GPU:
+
+| Stage | warm | spread |
+|---|---|---|
+| TraceCommit | ~8 ms | 7.3–9.1 |
+| Quotient | ~8.5 ms | 8.0–8.8 |
+| FriOpen | ~1.3 s | 1.25–1.34 |
+
+FriOpen is 95% of the prove and is dominated by the eager query loop: 84
+queries × (2 input opens + 16 fold-layer opens) ≈ 1,500 host-dispatched
+`MerkleTree.open` walks. Batching the opens (sp1-zorch vmaps them; zorch's
+`smcs.prove_openings_at_indices` is the worked example) is the identified
+next optimization — the commit/quotient legs are already device-bound.
+
+Same-instance sanity check at the golden config (n=8 Fibonacci, 84 queries,
+16 PoW bits): the fork's serial-CPU `p3_uni_stark::prove` runs ~8.8 ms;
+pico-zorch warm is ~65 ms (CPU) / ~125 ms (GPU) — constant dispatch overhead
+dominates a toy instance, so this ratio bounds overheads, not throughput.
+
 A ratio against Pico is only a baseline when both sides prove the **same
 instance** with **byte-identical output** on the **same hardware** —
 sp1-zorch's rule, and it applies unchanged. Nothing here satisfies that

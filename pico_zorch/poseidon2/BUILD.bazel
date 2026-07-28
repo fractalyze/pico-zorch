@@ -1,5 +1,6 @@
 load("@rules_python//python:defs.bzl", "py_library", "py_test")
 load("@pico_zorch_pip//:requirements.bzl", "requirement")
+load("//:defs.bzl", "GPU_PLUGIN_DEPS")
 
 # Pico's Poseidon2-KoalaBear-16 instance + Plonky3 MerkleTreeMmcs-shaped stack.
 py_library(
@@ -30,5 +31,5 @@ py_test(
         requirement("absl_py"),
         requirement("frx"),
         requirement("zk_dtypes"),
-    ],
+    ] + GPU_PLUGIN_DEPS,
 )
