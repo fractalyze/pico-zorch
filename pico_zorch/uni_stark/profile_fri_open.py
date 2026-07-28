@@ -31,8 +31,8 @@ from pico_zorch.poseidon2.koalabear import koalabear16_merkle
 from pico_zorch.uni_stark.bench_prove import _block, _WideFibAir
 from pico_zorch.uni_stark.fri_stage import (
     _bitrev_lde_domain,
+    _ood_open,
     _opening_pos,
-    eval_matrix_at,
     fold_chain,
     open_batch,
     reduced_openings,
@@ -60,13 +60,12 @@ def _one_pass(tree, trace, trace_data, claim, quotient, t, n, n_cols, params):
     one = fnp.ones((), F)
 
     with frx.profiler.TraceAnnotation("ood_evals"):
-        trace_local = eval_matrix_at(trace, one, claim.zeta)
-        trace_next = eval_matrix_at(trace, one, claim.zeta_next)
-        chunk_values = fnp.stack(
-            [
-                eval_matrix_at(c, d.shift, claim.zeta)
-                for c, d in zip(quotient.chunks, quotient.qc_domains)
-            ]
+        trace_local, trace_next, chunk_values = _ood_open(
+            trace,
+            tuple(quotient.chunks),
+            tuple(d.shift for d in quotient.qc_domains),
+            claim.zeta,
+            claim.zeta_next,
         )
     tm.lap("ood_evals", (trace_local, trace_next, chunk_values))
 

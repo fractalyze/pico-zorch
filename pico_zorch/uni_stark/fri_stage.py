@@ -25,7 +25,7 @@ from zk_dtypes import koalabearx4_mont as EF
 from zorch.coding.reed_solomon import BitReversedReedSolomon, eval_domain
 from zorch.commit.merkle import MerkleTree, Opening
 from zorch.pcs.deep import deep_composition
-from zorch.poly.univariate import eval_coeffs
+from zorch.poly.univariate import powers
 from zorch.stage import (
     ProveResult,
     ProverStage,
@@ -46,14 +46,36 @@ from pico_zorch.uni_stark.types import (
 )
 
 
-def eval_matrix_at(evals: Array, shift: Array, z: Array) -> Array:
-    """Out-of-domain evaluation of each column of `[n, w]` coset evaluations:
-    interpolate on the plain subgroup (coefficients of p̃(y) = p(shift·y)) and
-    evaluate at y = z/shift — field-identical to the reference's barycentric
-    `interpolate_coset`."""
-    n, _ = evals.shape
-    coeffs = lax.ntt(evals.T, ntt_type="INTT", ntt_length=n)
-    return eval_coeffs(coeffs, z / shift.astype(z.dtype))
+def _eval_columns(coeffs: Array, y: Array) -> Array:
+    """`[w, n]` coefficient rows evaluated at the extension point `y`:
+    Σ_j coeffs[:, j]·y^j via log-doubling powers. The coefficients are
+    promoted to the extension first — a 2-D mixed base×extension multiply
+    trips an XLA shape-rewrite RET_CHECK in the frx lowering (as does
+    `eval_coeffs`' associative-scan schedule)."""
+    ypow = powers(y, coeffs.shape[-1])
+    return (coeffs.astype(y.dtype) * ypow[None, :]).sum(axis=-1)
+
+
+@frx.jit
+def _ood_open(trace, chunks, chunk_shifts, zeta, zeta_next):
+    """All out-of-domain values in one program; the trace interpolates once
+    for both ζ and ζ·g. Interpolation is on the plain subgroup (coefficients
+    of p̃(y) = p(shift·y)), evaluation at y = z/shift — field-identical to the
+    reference's barycentric `interpolate_coset`."""
+    n = trace.shape[0]
+    coeffs = lax.ntt(trace.T, ntt_type="INTT", ntt_length=n)
+    trace_local = _eval_columns(coeffs, zeta)
+    trace_next = _eval_columns(coeffs, zeta_next)
+    chunk_values = fnp.stack(
+        [
+            _eval_columns(
+                lax.ntt(c.T, ntt_type="INTT", ntt_length=c.shape[0]),
+                zeta / s.astype(zeta.dtype),
+            )
+            for c, s in zip(chunks, chunk_shifts)
+        ]
+    )
+    return trace_local, trace_next, chunk_values
 
 
 @partial(frx.jit, static_argnames=("opening_pos",))
@@ -168,13 +190,12 @@ class FriOpener(
         quotient = witness.quotient
         quotient_degree = len(quotient.chunks)
 
-        trace_local = eval_matrix_at(witness.trace, one, claim.zeta)
-        trace_next = eval_matrix_at(witness.trace, one, claim.zeta_next)
-        chunk_values = fnp.stack(
-            [
-                eval_matrix_at(c, d.shift, claim.zeta)
-                for c, d in zip(quotient.chunks, quotient.qc_domains)
-            ]
+        trace_local, trace_next, chunk_values = _ood_open(
+            witness.trace,
+            tuple(quotient.chunks),
+            tuple(d.shift for d in quotient.qc_domains),
+            claim.zeta,
+            claim.zeta_next,
         )
 
         # One observe of the flat value stream — byte-identical to the

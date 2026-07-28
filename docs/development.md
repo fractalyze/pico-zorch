@@ -87,10 +87,10 @@ Converged warm passes, `--n_cols=32`, GPU, 84 queries:
 
 | Stage | 2^16 rows | 2^20 rows |
 |---|---|---|
-| TraceCommit | ~3.5 ms | ~9.6 ms |
-| Quotient | ~6 ms | ~13 ms |
-| FriOpen | ~6 ms | ~22 ms |
-| total | ~16 ms | ~47 ms |
+| TraceCommit | ~1 ms | ~8.6 ms |
+| Quotient | ~2 ms | ~3.4 ms |
+| FriOpen | ~7 ms | ~19 ms |
+| total | ~12 ms | ~33 ms |
 
 The profiler (`profile_fri_open --trace_dir=...`, frx profiler + perfetto)
 is what got FriOpen here: the eager query loop first read 1.3 s at 2^16;

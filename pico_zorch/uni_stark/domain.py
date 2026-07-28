@@ -102,14 +102,22 @@ class Coset:
         xs = coset.points()
         reps = coset.size >> rate_bits
         z_cycled = fnp.tile(z_evals, reps)
+        # Z_H is 2^rate_bits-periodic: invert the few distinct values, then
+        # tile — not the full coset-length array.
+        inv_z_cycled = fnp.tile(one / z_evals, reps)
 
         g_trace = self.gen()
         first_point = one
         last_point = one / g_trace  # g^{n-1} = g^{-1}
 
+        # One full-length inversion serves both point selectors:
+        # 1/d0 = d1/(d0·d1), 1/d1 = d0/(d0·d1).
+        d_first = xs - first_point
+        d_last = xs - last_point
+        inv_prod = one / (d_first * d_last)
         return {
-            "is_first_row": z_cycled / (xs - first_point),
-            "is_last_row": z_cycled / (xs - last_point),
-            "is_transition": xs - last_point,
-            "inv_zeroifier": one / z_cycled,
+            "is_first_row": z_cycled * inv_prod * d_last,
+            "is_last_row": z_cycled * inv_prod * d_first,
+            "is_transition": d_last,
+            "inv_zeroifier": inv_z_cycled,
         }

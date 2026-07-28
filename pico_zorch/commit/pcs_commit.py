@@ -13,8 +13,10 @@ of every matrix's row i in commit order.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import partial
 from typing import Any, Sequence
 
+import frx
 import frx.numpy as fnp
 from frx import Array, lax
 
@@ -66,6 +68,16 @@ def commit_matrices(
     return raw_root, CommitData(tuple(matrices), leaves, digest_layers)
 
 
+@partial(frx.jit, static_argnames=("tree", "log_blowup"))
+def _commit_pcs(tree, evals, shifts, log_blowup):
+    ldes = [
+        bit_reverse_rows(coset_lde(e, log_blowup, s)) for e, s in zip(evals, shifts)
+    ]
+    leaves = fnp.concatenate(ldes, axis=1) if len(ldes) > 1 else ldes[0]
+    raw_root, digest_layers = tree.commit(leaves)
+    return tuple(ldes), leaves, raw_root, tuple(digest_layers)
+
+
 def commit_pcs(
     tree: MerkleTree,
     evals: Sequence[Array],
@@ -75,11 +87,11 @@ def commit_pcs(
 ) -> tuple[Array, CommitData]:
     """The reference `pcs.commit`: per-matrix coset LDE (shift GENERATOR/domain
     shift, i.e. GENERATOR for natural domains unless `shifts` overrides), rows
-    bit-reversed, one shared tree."""
+    bit-reversed, one shared tree — one device program per shape set."""
     dtype = evals[0].dtype
     if shifts is None:
         shifts = [fnp.array(GENERATOR, dtype=dtype)] * len(evals)
-    ldes = [
-        bit_reverse_rows(coset_lde(e, log_blowup, s)) for e, s in zip(evals, shifts)
-    ]
-    return commit_matrices(tree, ldes)
+    ldes, leaves, raw_root, digest_layers = _commit_pcs(
+        tree, tuple(evals), tuple(shifts), log_blowup
+    )
+    return raw_root, CommitData(ldes, leaves, list(digest_layers))

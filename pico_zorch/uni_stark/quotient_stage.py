@@ -12,7 +12,9 @@ composite, which is the first place those values exist.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import partial
 
+import frx
 import frx.numpy as fnp
 from frx import Array
 from zk_dtypes import koalabear_mont as F
@@ -39,6 +41,20 @@ from pico_zorch.uni_stark.types import (
 )
 
 
+@partial(frx.jit, static_argnames=("air", "log_n", "log_qd"))
+def _quotient_flat(air, log_n, log_qd, lde, public_values, alpha):
+    """Quotient evaluations as base columns, one program: the natural-order
+    sub-coset rows, the α-folded constraints over the coset, the Z_H divide."""
+    trace_domain = Coset(log_n, fnp.ones((), F))
+    quotient_domain = Coset(log_n + log_qd, fnp.array(GENERATOR, dtype=F))
+    trace_on_qd = bit_reverse_rows(lde[: quotient_domain.size])
+    return flatten_to_base(
+        quotient_values(
+            air, public_values, trace_domain, quotient_domain, trace_on_qd, alpha
+        )
+    )
+
+
 @dataclass(frozen=True)
 class QuotientProver(
     ProverStage[
@@ -63,20 +79,15 @@ class QuotientProver(
         t, alpha = sample_ext(transcript)
 
         quotient_domain = Coset(log_n + log_qd, generator)
-        # The reference's get_evaluations_on_domain: the natural-order
-        # sub-coset is the re-bit-reversed prefix of the committed LDE.
-        trace_on_qd = bit_reverse_rows(
-            witness.trace_data.matrices[0][: quotient_domain.size]
-        )
-        q_vals = quotient_values(
+        q_flat = _quotient_flat(
             claim.air,
+            log_n,
+            log_qd,
+            witness.trace_data.matrices[0],
             claim.public_values,
-            trace_domain,
-            quotient_domain,
-            trace_on_qd,
             alpha,
         )
-        chunks = quotient_domain.split_evals(quotient_degree, flatten_to_base(q_vals))
+        chunks = quotient_domain.split_evals(quotient_degree, q_flat)
         qc_domains = quotient_domain.split_domains(quotient_degree)
         quotient_root, quotient_data = commit_pcs(
             self.tree,
