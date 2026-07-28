@@ -85,22 +85,36 @@ that width, and only its *size* scaling is meaningful.
 
 Converged warm passes, `--n_cols=32`, GPU, 84 queries:
 
-| Stage | 2^16 rows | 2^20 rows |
-|---|---|---|
-| TraceCommit | ~1 ms | ~8.6 ms |
-| Quotient | ~2 ms | ~3.4 ms |
-| FriOpen | ~7 ms | ~19 ms |
-| total | ~12 ms | ~33 ms |
+| Stage | 2^16 rows | 2^20 rows | spread (2^20) |
+|---|---|---|---|
+| TraceCommit | ~0.9 ms | ~8.1 ms | 8.1–10.9 |
+| Quotient | ~1.7 ms | ~2.8 ms | 2.7–3.1 |
+| FriOpen | ~4.3 ms | ~8.0 ms | 8.0–8.4 |
+| total | ~8.9 ms | ~20.9 ms | 20.4–24.9 |
+
+Whole-prove device utilization is **78%** (TraceCommit 88%, FriOpen 74%),
+measured by annotating the stages and summing device-side events inside
+each window — `bench_prove --trace_dir=...`. With ~20 ms wall against
+~17.6 ms of device work, the remaining orchestration headroom is a few ms;
+further wins have to come from the kernels themselves (the leaf-hash
+`sponge_hash` and the NTT passes are the top entries).
 
 The profiler (`profile_fri_open --trace_dir=...`, frx profiler + perfetto)
-is what got FriOpen here: the eager query loop first read 1.3 s at 2^16;
-batching the opens per tree still left 327 ms of wall for 2.7 ms of device
-work across 4,284 kernel launches — eager vmap dispatch, not math. Jitting
-`open_batch`, `reduced_openings`, and finally the whole fold chain as one
-program (`fold_chain`) collapsed FriOpen to ~19 ms at 2^20, where the
-largest remaining leg is `reduced_openings`' genuinely device-bound fused
-kernel. The stages are now balanced (commit ~10 / quotient ~13 / open ~19
-at 2^20); no single dispatch-bound hotspot remains.
+drove every step down from a 1.3 s starting point at 2^16. The sequence,
+each step found by reading device-busy against wall in the trace:
+
+| Finding | Fix | 2^16 FriOpen |
+|---|---|---|
+| ~1,500 eager per-query `MerkleTree.open` walks | batch per tree | 1.3 s → 327 ms |
+| 327 ms wall for 2.7 ms device, 4,284 launches | jit the opening zones | 327 → ~6 ms |
+| fold chain 17.4 ms wall / 3.6 ms device (2^20) | fuse the chain into one program | |
+| ~460 digest arrays + query indices crossing Python | fuse the whole tail (`fold_and_open`) | |
+| trace columns α-reduced once per opening point | share the inner reduction | ~6 → 4.3 ms |
+
+Two things that did *not* help, recorded so they are not retried: merging
+the 22 per-tree opening dispatches into one program (dispatch count had
+stopped mattering), and expecting the persistent cache to shorten the cold
+pass (it is tracing-bound, not compile-bound).
 
 ### Compilation cache and the cold pass
 
