@@ -1,5 +1,6 @@
-// Pico's Poseidon2 round-constant table, copied verbatim from
-// https://github.com/brevis-network/pico/blob/v2.0.0/vm/src/primitives/mod.rs (RC_16_30_U32).
+// Pico's Poseidon2 round-constant table (RC_16_30_U32), copied verbatim from
+// https://github.com/brevis-network/pico/blob/v2.0.0/vm/src/primitives/mod.rs
+// — brevis-network/pico, dual-licensed MIT OR Apache-2.0.
 pub const RC_16_30_U32: [[u32; 16]; 30] = [
     [
         2110014213, 3964964605, 2190662774, 2732996483, 640767983, 3403899136, 1716033721,
