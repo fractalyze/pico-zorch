@@ -1,0 +1,9 @@
+load("@rules_python//python:defs.bzl", "py_library")
+
+# The package __init__ — .bazelrc sets --incompatible_default_to_explicit_init_py,
+# so every library under pico_zorch/ deps on this to keep the package importable.
+py_library(
+    name = "pico_zorch",
+    srcs = ["__init__.py"],
+    visibility = ["//visibility:public"],
+)
