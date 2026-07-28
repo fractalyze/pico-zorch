@@ -21,6 +21,7 @@ from zk_dtypes import koalabear_mont as F
 
 from pico_zorch.challenger.challenger import fresh_challenger
 from pico_zorch.poseidon2.koalabear import koalabear16_merkle
+from pico_zorch.uni_stark.fri_stage import query_opening
 from pico_zorch.uni_stark.prover import StarkProver
 from pico_zorch.uni_stark.testing.fib_air import FibonacciAir, generate_trace_rows
 from pico_zorch.uni_stark.types import FriParams, StarkClaim, StarkWitness
@@ -107,10 +108,14 @@ class FibE2eTest(absltest.TestCase):
         want_queries = opening_proof["query_proofs"]
         stored_indices = opening_proof["stored_query_indices"]
         self.assertEqual(
-            len(proof.opening.fri.input_openings), self.golden["fri_config"]["num_queries"]
+            proof.opening.fri.trace_openings.row.shape[0],
+            self.golden["fri_config"]["num_queries"],
         )
         for q, want_q in zip(stored_indices, want_queries):
-            got_rounds = proof.opening.fri.input_openings[q]
+            got_rounds = [
+                query_opening(proof.opening.fri.trace_openings, q),
+                query_opening(proof.opening.fri.quotient_openings, q),
+            ]
             want_rounds = want_q["input_proof"]
             for r, (got, want_r) in enumerate(zip(got_rounds, want_rounds)):
                 # opened_values: one matrix per round -> [row].
@@ -123,9 +128,10 @@ class FibE2eTest(absltest.TestCase):
                 np.testing.assert_array_equal(
                     got_path, want_path, err_msg=f"query {q} round {r} path"
                 )
-            for layer, (got_open, want_step) in enumerate(
-                zip(proof.opening.fri.commit_phase_openings[q], want_q["commit_phase_openings"])
+            for layer, (batched, want_step) in enumerate(
+                zip(proof.opening.fri.commit_phase_openings, want_q["commit_phase_openings"])
             ):
+                got_open = query_opening(batched, q)
                 # The reference stores only the sibling; our opening holds the
                 # full pair row [8 base] = 2 extension values.
                 row = _canonical(got_open.row).reshape(2, 4)

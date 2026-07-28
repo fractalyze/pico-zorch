@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import frx
 import frx.numpy as fnp
 import numpy as np
 from frx import Array, lax
@@ -21,7 +22,7 @@ from zk_dtypes import koalabear_mont as F
 from zk_dtypes import koalabearx4_mont as EF
 
 from zorch.coding.reed_solomon import BitReversedReedSolomon, eval_domain
-from zorch.commit.merkle import MerkleTree
+from zorch.commit.merkle import MerkleTree, Opening
 from zorch.pcs.deep import deep_composition
 from zorch.poly.univariate import eval_coeffs
 from zorch.stage import (
@@ -93,6 +94,17 @@ def _opening_pos(width: int, quotient_degree: int) -> list[int]:
     """Point index per flattened column: trace at ζ, trace at ζ·g, chunks
     at ζ."""
     return [0] * width + [1] * width + [0] * (4 * quotient_degree)
+
+
+def open_batch(tree: MerkleTree, data: CommitData, indices: Array) -> Opening:
+    """All queries' openings of one tree as a single vmapped device call — the
+    per-query eager loop was 95% of the prove's wall clock."""
+    return frx.vmap(lambda i: tree.open(data.leaves, data.digest_layers, i))(indices)
+
+
+def query_opening(batched: Opening, q: int) -> Opening:
+    """Query `q`'s view of a batched Opening."""
+    return Opening(batched.row[q], [p[q] for p in batched.path])
 
 
 def _bitrev_lde_domain(lde_height: int) -> Array:
@@ -176,30 +188,7 @@ class FriOpener(
             t, claim.degree_bits + log_blowup, self.params.num_queries
         )
 
-        input_openings = []
-        phase_openings = []
-        for idx in map(int, indices):
-            input_openings.append(
-                [
-                    self.tree.open(
-                        witness.trace_data.leaves,
-                        witness.trace_data.digest_layers,
-                        idx,
-                    ),
-                    self.tree.open(
-                        quotient.quotient_data.leaves,
-                        quotient.quotient_data.digest_layers,
-                        idx,
-                    ),
-                ]
-            )
-            phase_openings.append(
-                [
-                    self.tree.open(data.leaves, data.digest_layers, (idx >> layer) >> 1)
-                    for layer, data in enumerate(phase_data)
-                ]
-            )
-
+        idx = fnp.asarray(indices.astype(np.int32))
         proof = FriOpeningProof(
             trace_local=trace_local,
             trace_next=trace_next,
@@ -208,8 +197,14 @@ class FriOpener(
                 commit_phase_roots=commit_roots,
                 final_poly=final_poly,
                 pow_witness=pow_witness,
-                input_openings=input_openings,
-                commit_phase_openings=phase_openings,
+                trace_openings=open_batch(self.tree, witness.trace_data, idx),
+                quotient_openings=open_batch(
+                    self.tree, quotient.quotient_data, idx
+                ),
+                commit_phase_openings=[
+                    open_batch(self.tree, data, (idx >> (layer + 1)))
+                    for layer, data in enumerate(phase_data)
+                ],
             ),
         )
         return ProveResult(TrivialClaim(), proof, t)
@@ -267,12 +262,17 @@ class FriOpeningVerifier(
         opening_pos = _opening_pos(width, quotient_degree)
         code = BitReversedReedSolomon(1 << claim.degree_bits, 1 << log_blowup, F)
 
+        if proof.fri.trace_openings.row.shape != (
+            params.num_queries,
+            width,
+        ) or proof.fri.quotient_openings.row.shape != (
+            params.num_queries,
+            4 * quotient_degree,
+        ):
+            raise ValueError("input opening shape mismatch")
         for q, idx in enumerate(map(int, indices)):
-            trace_open, quotient_open = proof.fri.input_openings[q]
-            if trace_open.row.shape != (width,) or quotient_open.row.shape != (
-                4 * quotient_degree,
-            ):
-                raise ValueError("input opening width mismatch")
+            trace_open = query_opening(proof.fri.trace_openings, q)
+            quotient_open = query_opening(proof.fri.quotient_openings, q)
             ok = ok & fnp.array_equal(
                 self.tree.reconstruct_root(idx, trace_open), claim.trace_root
             )
@@ -287,7 +287,8 @@ class FriOpeningVerifier(
                 columns, opened, points, opening_pos, alpha_fri, xs_br[idx : idx + 1]
             )[0]
 
-            for layer, opening in enumerate(proof.fri.commit_phase_openings[q]):
+            for layer, batched in enumerate(proof.fri.commit_phase_openings):
+                opening = query_opening(batched, q)
                 index_i = idx >> layer
                 pair_index = index_i >> 1
                 pair = lax.bitcast_convert_type(

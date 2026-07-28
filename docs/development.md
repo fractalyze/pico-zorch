@@ -83,24 +83,22 @@ that width, and only its *size* scaling is meaningful.
 
 ### First numbers (2026-07-28, RTX 5090, zorch @7e7541d, frx dev20260725)
 
-Converged warm passes, `--degree_bits=16 --n_cols=32 --runs=4`, GPU:
+Converged warm passes, `--n_cols=32`, GPU, 84 queries:
 
-| Stage | warm | spread |
+| Stage | 2^16 rows | 2^20 rows |
 |---|---|---|
-| TraceCommit | ~8 ms | 7.3–9.1 |
-| Quotient | ~8.5 ms | 8.0–8.8 |
-| FriOpen | ~1.3 s | 1.25–1.34 |
+| TraceCommit | ~3.4 ms | ~9.5 ms |
+| Quotient | ~8 ms | ~13 ms |
+| FriOpen | ~229 ms | ~320 ms |
+| total | ~243 ms | ~345 ms |
 
-FriOpen is 95% of the prove and is dominated by the eager query loop: 84
-queries × (2 input opens + 16 fold-layer opens) ≈ 1,500 host-dispatched
-`MerkleTree.open` walks. Batching the opens (sp1-zorch vmaps them; zorch's
-`smcs.prove_openings_at_indices` is the worked example) is the identified
-next optimization — the commit/quotient legs are already device-bound.
-
-Same-instance sanity check at the golden config (n=8 Fibonacci, 84 queries,
-16 PoW bits): the fork's serial-CPU `p3_uni_stark::prove` runs ~8.8 ms;
-pico-zorch warm is ~65 ms (CPU) / ~125 ms (GPU) — constant dispatch overhead
-dominates a toy instance, so this ratio bounds overheads, not throughput.
+Query openings are one vmapped device call per tree (`open_batch`) — the
+earlier per-query eager loop cost ~1.3 s at 2^16 alone. FriOpen still
+dominates and barely grows 2^16→2^20, so its floor is host dispatch (the
+eager per-layer fold/commit/transcript loop, the grind, the OOD evals),
+not device math: jitting the fold chain into one device program (zorch's
+fusion-marker path, sp1-zorch's whole-zone jit) is the identified next
+step. The commit and quotient legs are device-bound and scale.
 
 A ratio against Pico is only a baseline when both sides prove the **same
 instance** with **byte-identical output** on the **same hardware** —

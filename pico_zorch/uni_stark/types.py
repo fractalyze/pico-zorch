@@ -123,12 +123,13 @@ class FriProof:
     commit_phase_roots: Sequence[Array]
     final_poly: Array
     pow_witness: Array
-    # Per query, per input round (trace, quotient): the leaf-row opening.
-    input_openings: Sequence[Sequence[Opening]]
-    # Per query, per fold layer: the opened pair row (2 extension values as 8
-    # base columns) plus path — the reference's `CommitPhaseProofStep` carries
-    # only the sibling, row column `(index >> layer) ^ 1 & 1` here.
-    commit_phase_openings: Sequence[Sequence[Opening]]
+    # Batched over queries (leading axis num_queries): the trace and quotient
+    # leaf-row openings, then one batched pair-row opening per fold layer —
+    # the reference's `CommitPhaseProofStep` carries only the sibling, row
+    # column `(index >> layer) ^ 1 & 1` here.
+    trace_openings: Opening
+    quotient_openings: Opening
+    commit_phase_openings: Sequence[Opening]
 
 
 @dataclass(frozen=True)
