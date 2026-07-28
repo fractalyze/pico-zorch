@@ -81,16 +81,19 @@ reuse that looked free (reading a domain off a freshly constructed coset
 code, which eagerly builds a block-length powers table) cost FriOpen 20-40%
 and was caught exactly this way.
 
+Minimum over converged passes — the least contended sample, and the only
+statistic that does not drift with whatever else the box is doing:
+
 | Stage | 2^16 rows | 2^20 rows |
 |---|---|---|
-| TraceCommit | 0.8–1.1 ms | 8.1–8.2 ms |
-| Quotient | 1.5–1.9 ms | 3.1–3.3 ms |
-| FriOpen | 3.4–4.1 ms | 8.2–8.9 ms |
-| total | 7.1–8.6 ms | 21.4–22.6 ms |
+| TraceCommit | 0.8 ms | 8.1 ms |
+| Quotient | 1.5 ms | 3.1 ms |
+| FriOpen | 3.4 ms | 8.2 ms |
+| total | 7.1 ms | 21.4 ms |
 
 Re-measure rather than trusting the table across a zorch pin or frx wheel
-bump; TraceCommit in particular throws 11–20 ms outliers when the card is
-shared, so an outlier is a contention signal, not a regression.
+bump. A pass reading well above these is a contention signal, not a
+regression — TraceCommit throws 11–20 ms on a shared card.
 
 ### What a number here does and does not mean
 
