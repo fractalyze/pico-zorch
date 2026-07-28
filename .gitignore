@@ -31,3 +31,6 @@ venv/
 .vscode/
 .idea/
 .DS_Store
+
+# Rust golden harness build output
+/golden/target/

@@ -18,3 +18,7 @@ test --test_env=FRX_PLATFORMS=cpu
 # working copy instead of the pinned git_override, add to .bazelrc.user:
 #   common --override_module=zorch=/abs/path/to/your/zorch/checkout
 try-import %workspace%/.bazelrc.user
+
+# Persistent XLA compilation cache: pass the client's setting through to tests
+# so every bazel test invocation stops paying the multi-minute cold compile.
+test --test_env=FRX_COMPILATION_CACHE_DIR

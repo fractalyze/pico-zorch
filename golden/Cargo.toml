@@ -1,0 +1,30 @@
+[package]
+name = "pico-zorch-golden"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Golden-vector generator for the pico-zorch byte-match tests. Links the SAME
+# Plonky3 fork rev Pico v2.0.0 vendors (brevis-network/Plonky3@7fbe1908), and
+# instantiates Pico's exact KoalaBearPoseidon2 stark config (round constants
+# from pico v2.0.0 vm/src/primitives/mod.rs, FRI log_blowup=1 / 84 queries /
+# 16 pow bits from vm/src/configs/stark_config/kb_poseidon2.rs), so the JSON
+# fixtures under pico_zorch/**/testdata/golden/ are the reference semantics by
+# construction.
+
+[dependencies]
+p3-air = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }
+p3-challenger = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }
+p3-commit = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }
+p3-dft = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }
+p3-field = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }
+p3-fri = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }
+p3-koala-bear = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }
+p3-matrix = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }
+p3-merkle-tree = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }
+p3-poseidon2 = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }
+p3-symmetric = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }
+p3-uni-stark = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }
+p3-util = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }
+serde = "1"
+serde_json = "1"
