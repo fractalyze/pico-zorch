@@ -57,6 +57,12 @@ reference's `find_any` grind "lowest witness wins", the same rule zorch's
 `grind_search` implements — so a regeneration is a no-op unless the
 reference pin changes.
 
+Fixtures stay small (KBs, the family convention): the e2e proof golden
+stores only a prefix of the 84 query proofs, since the pre-query transcript
+(roots, challenges, final polynomial, PoW witness) is a sponge image of
+every earlier byte and pins the rest; the consumer still proves with all 84
+queries and compares the stored prefix.
+
 ## The scheme (what Pico actually runs)
 
 Pico delegates proving to its Plonky3-based backend. The constants that pin

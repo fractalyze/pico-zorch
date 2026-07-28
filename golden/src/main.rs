@@ -244,7 +244,23 @@ fn emit_fib_prove(out: &str) {
     verify(&config, &FibonacciAir {}, &mut challenger, &proof, &pis)
         .expect("golden proof must verify");
 
-    let proof_json = serde_json::to_value(&proof).unwrap();
+    let mut proof_json = serde_json::to_value(&proof).unwrap();
+
+    // The proof is generated and verified under Pico's real 84-query config,
+    // but only the first STORED_QUERY_PROOFS query proofs are committed: the
+    // pre-query transcript (roots, challenges, final poly, PoW witness)
+    // already pins every earlier byte, and 84 full Merkle path sets would be
+    // ~17k lines of fixture. The consumer must still prove with all 84
+    // queries; it just compares the stored prefix.
+    const STORED_QUERY_PROOFS: usize = 4;
+    let stored: Vec<Value> = proof_json["opening_proof"]["query_proofs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .take(STORED_QUERY_PROOFS)
+        .cloned()
+        .collect();
+    proof_json["opening_proof"]["query_proofs"] = Value::Array(stored);
 
     // Re-derive the pre-opening challenges the way the verifier does, so the
     // Python pipeline can byte-match alpha/zeta without parsing FRI first.
