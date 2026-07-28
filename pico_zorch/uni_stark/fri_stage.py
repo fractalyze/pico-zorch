@@ -29,7 +29,7 @@ recovers them from the fold chain.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from functools import partial
+from functools import lru_cache, partial
 
 import frx
 import frx.numpy as fnp
@@ -240,9 +240,13 @@ def query_opening(batched: Opening, q: int) -> Opening:
     return Opening(batched.row[q], [p[q] for p in batched.path])
 
 
+@lru_cache(maxsize=None)
 def _lde_code(n: int, log_blowup: int) -> BitReversedReedSolomon:
     """The code describing the committed layout: same coset and row order
-    `pcs_commit` writes, so its `domain()` is the committed x-coordinates."""
+    `pcs_commit` writes, so its `domain()` is the committed x-coordinates.
+
+    Cached because constructing a coset code eagerly builds a block-length
+    powers table."""
     return BitReversedReedSolomon(
         n, 1 << log_blowup, F, coset_shift=fnp.array(GENERATOR, dtype=F)
     )

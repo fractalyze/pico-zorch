@@ -62,6 +62,10 @@ Every element of that invocation earns its place:
   bodies upstream (zorch's `scan_body`).
 - **`XLA_PYTHON_CLIENT_PREALLOCATE=false`** — a run that compiles many
   programs loads CUBINs against the preallocation pool and OOMs without it.
+- **No `--xla_gpu_enable_command_buffer`.** Capturing fusions as CUDA graphs
+  amortizes per-launch cost, which the pipeline no longer has: each stage is
+  a handful of large jitted programs, so measurements with and without the
+  flag sit inside run-to-run noise at both 2^16 and 2^20.
 - **An idle card**: contending with another prove during CUDA init can
   hard-kill the run.
 - **`--runs=5`**, then read a converged pass (3–5), never pass 1 (cold) or
