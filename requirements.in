@@ -11,5 +11,10 @@ numpy
 frx==0.10.1.dev20260803000037
 frxlib==0.10.1.dev20260803000037
 frx-cuda12-pjrt==0.10.1.dev20260803000037
-frx-cuda12-plugin==0.10.1.dev20260803000037
+# `[with-cuda]` pulls the CUDA 12 userspace (cublas, cudart, cudnn, nccl, ...)
+# in as wheels. Without it the plugin .so resolves but finds no CUDA runtime,
+# `cudaRuntimeGetVersion` fails, and frx falls back to CPU with only a warning
+# — a GPU leg that silently measures the CPU backend. The wheels also keep the
+# CUDA version pinned to the plugin rather than to whatever the host installed.
+frx-cuda12-plugin[with-cuda]==0.10.1.dev20260803000037
 zk-dtypes==0.0.10
