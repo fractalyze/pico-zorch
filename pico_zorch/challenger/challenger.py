@@ -1,28 +1,28 @@
 # Copyright 2026 The pico-zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""Pico's challenger as a zorch transcript flavour.
+"""Pico's Fiat-Shamir transcript.
 
 Pico's `SC_Challenger = DuplexChallenger<KoalaBear, Poseidon2KoalaBear<16>,
-16, 8>` is byte-for-byte zorch's overwrite-mode `DuplexTranscript` over the
-Pico permutation — same absorb mode, same back-to-front squeeze, same
-low-canonical-bits PoW predicate — so binding the flavour is all it takes.
-Challenges are drawn through zorch's `ChallengePolicy`, which reads the
-limb count off the degree ratio; only `sample_bits` is Plonky3-specific
-enough to need its own definition.
+16, 8>` uses the same overwrite-mode duplex state machine as zorch, but the
+protocol owns its concrete transcript type and Fiat-Shamir cadence. Challenges
+are drawn through zorch's `ChallengePolicy`, which reads the limb count off the
+degree ratio; `sample_bits` and the proof-of-work absorption path retain Pico's
+Plonky3 semantics.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
-import frx
 import frx.numpy as fnp
 from frx import Array, lax
+from frx.tree_util import register_dataclass
 from zk_dtypes import koalabear_mont as F
 from zk_dtypes import koalabearx4_mont as EF
 
 from zorch.challenge import ChallengePolicy
 from zorch.hash.poseidon2.poseidon2 import Poseidon2
-from zorch.transcript import DuplexTranscript, TranscriptT
+from zorch.transcript import DuplexState, DuplexTranscript
 
 from pico_zorch.poseidon2.koalabear import koalabear16_params
 
@@ -33,52 +33,82 @@ RATE = 8
 CHALLENGE = ChallengePolicy(EF)
 
 
-class JitPermutation:
-    """`Permutation` wrapper with a jitted `permute`.
+@register_dataclass
+@dataclass(frozen=True)
+class PicoTranscript:
+    """Pico's transcript over its Poseidon2-KoalaBear permutation.
 
-    The transcript drives the permutation from eager host loops, where an
-    un-jitted permute re-dispatches its few hundred field ops every call."""
+    The protocol owns this public type and delegates the generic overwrite-mode
+    state machine to zorch. Composition keeps Pico independent of protected
+    ``DuplexTranscript`` methods and makes protocol-specific cadence explicit.
+    """
 
-    def __init__(self, inner: Poseidon2) -> None:
-        self._inner = inner
-        self.width: int = inner.width
-        self.dtype: Any = inner.dtype
-        self.has_dedicated_fusion: bool = inner.has_dedicated_fusion
-        self._permute = frx.jit(inner.permute)
+    _duplex: DuplexTranscript
 
-    def permute(self, state: Array) -> Array:
-        return self._permute(state)
+    @classmethod
+    def new(cls) -> PicoTranscript:
+        permutation = Poseidon2(koalabear16_params())
+        return cls(DuplexTranscript.new(permutation, RATE))
 
-    # Forwarded from the wrapped permutation, which carries value equality
-    # for this reason: the wrapper is a static meta_field of the transcript,
-    # so identity semantics would make every fresh challenger a cache miss.
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, JitPermutation):
-            return NotImplemented
-        return self._inner == other._inner
+    @property
+    def state(self) -> DuplexState:
+        return self._duplex.state
 
-    def __hash__(self) -> int:
-        return hash(self._inner)
+    @property
+    def field(self) -> Any:
+        return self._duplex.field
+
+    @property
+    def has_dedicated_fusion(self) -> bool:
+        return self._duplex.has_dedicated_fusion
+
+    def observe(self, values: Array) -> PicoTranscript:
+        return PicoTranscript(self._duplex.observe(values))
+
+    def sample(self, n: int = 1) -> tuple[PicoTranscript, Array]:
+        duplex, samples = self._duplex.sample(n)
+        return PicoTranscript(duplex), samples
+
+    def observe_and_sample(
+        self, values: Array, n: int = 1
+    ) -> tuple[PicoTranscript, Array]:
+        duplex, samples = self._duplex.observe_and_sample(values, n)
+        return PicoTranscript(duplex), samples
+
+    def sample_ext(self) -> tuple[PicoTranscript, Array]:
+        """Draw one quartic-extension challenge using Pico's cadence."""
+        transcript, challenge = CHALLENGE.sample(self)
+        return transcript, challenge
+
+    def sample_bits(self, bits: int) -> tuple[PicoTranscript, Array]:
+        """Draw the canonical low bits of one base-field squeeze."""
+        transcript, samples = self.sample_bits_many(bits, 1)
+        return transcript, samples[0]
+
+    def sample_bits_many(
+        self, bits: int, count: int
+    ) -> tuple[PicoTranscript, Array]:
+        """Draw canonical low bits from ``count`` consecutive squeezes.
+
+        Field arrays contain Montgomery representations, so masking them
+        before canonical conversion would silently select different queries.
+        """
+        transcript, raw = self.sample(count)
+        canonical = lax.convert_element_type(raw, fnp.uint32)
+        mask = fnp.uint32((1 << bits) - 1)
+        return transcript, (canonical & mask).astype(fnp.int32)
+
+    def check_witness(
+        self, witness: Array, *, pow_bits: int
+    ) -> tuple[PicoTranscript, Array]:
+        duplex, ok = self._duplex.check_witness(witness, pow_bits=pow_bits)
+        return PicoTranscript(duplex), ok
+
+    def grind(self, pow_bits: int) -> tuple[PicoTranscript, Array]:
+        duplex, witness = self._duplex.grind(pow_bits)
+        return PicoTranscript(duplex), witness
 
 
-def fresh_challenger() -> DuplexTranscript:
+def fresh_challenger() -> PicoTranscript:
     """Pico's challenger at its initial (all-zero) state."""
-    return DuplexTranscript.new(
-        JitPermutation(Poseidon2(koalabear16_params())), RATE
-    )
-
-
-def sample_ext(transcript: TranscriptT) -> tuple[TranscriptT, Array]:
-    """`sample_ext_element`, which is `CHALLENGE.sample`: the policy spends
-    one squeeze per extension coefficient, packed c0 + c1·X + c2·X² + c3·X³
-    over X⁴ = 3."""
-    return CHALLENGE.sample(transcript)
-
-
-def sample_bits(transcript: TranscriptT, bits: int) -> tuple[TranscriptT, Array]:
-    """`CanSampleBits::sample_bits`: the low `bits` of one squeeze's
-    canonical value. Masking the device array directly would read Montgomery
-    bits and draw different indices."""
-    t, raw = transcript.sample(1)
-    canonical = lax.convert_element_type(raw, fnp.uint32)
-    return t, (canonical[0] & fnp.uint32((1 << bits) - 1)).astype(fnp.int32)
+    return PicoTranscript.new()

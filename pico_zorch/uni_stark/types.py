@@ -25,19 +25,22 @@ from frx import Array
 
 from zorch.commit.merkle import Opening
 
-from pico_zorch.commit.pcs_commit import CommitData
 from pico_zorch.uni_stark.air import Air
 from pico_zorch.uni_stark.domain import Coset
 
 
 @dataclass(frozen=True)
-class FriParams:
-    """Pico's FRI knobs (KoalaBearPoseidon2::new(): 1 / 84 / 16).
+class CommitData:
+    """Prover data retained between FRI commitment and opening."""
 
-    These are the security budget: each query catches a codeword that is
-    far from low-degree with probability ~1 − 2^-log_blowup, and grinding
-    buys bits outright, so conjectured soundness is
-    log_blowup·num_queries + proof_of_work_bits — 100 bits as configured."""
+    matrices: tuple[Array, ...]
+    leaves: Array
+    digest_layers: list[Array]
+
+
+@dataclass(frozen=True)
+class FriParams:
+    """Pico's FRI configuration and 100-bit soundness budget."""
 
     log_blowup: int = 1
     num_queries: int = 84
@@ -102,6 +105,8 @@ class TraceOpeningClaim:
     zeta: Array
     zeta_next: Array
     degree_bits: int
+    width: int
+    quotient_degree: int
 
 
 @dataclass(frozen=True)

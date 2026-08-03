@@ -25,21 +25,27 @@ from zk_dtypes import koalabear_mont as F
 
 from zorch.coding.reed_solomon import BitReversedReedSolomon
 
-from pico_zorch.challenger.challenger import fresh_challenger, sample_ext
-from pico_zorch.commit.pcs_commit import commit_pcs
-from pico_zorch.poseidon2.koalabear import koalabear16_merkle
-from pico_zorch.uni_stark.bench_prove import _block, _WideFibAir
-from pico_zorch.uni_stark.fri_stage import (
+from pico_zorch.challenger.challenger import fresh_challenger
+from pico_zorch.uni_stark.fri import (
+    GENERATOR,
+    FriOpener,
     _lde_code,
     _open_head,
     fold_chain,
     open_batch,
     sample_query_indices,
 )
+from pico_zorch.poseidon2.koalabear import koalabear16_merkle
+from pico_zorch.uni_stark.bench_prove import _block, _WideFibAir
 from pico_zorch.uni_stark.prover import bind_instance
 from pico_zorch.uni_stark.quotient_stage import QuotientProver
 from pico_zorch.uni_stark.testing.fib_air import generate_trace_rows
-from pico_zorch.uni_stark.types import FriParams, QuotientClaim, QuotientWitness
+from pico_zorch.uni_stark.types import (
+    CommitData,
+    FriParams,
+    QuotientClaim,
+    QuotientWitness,
+)
 
 
 class _Timer:
@@ -53,11 +59,9 @@ class _Timer:
         self.t0 = now
 
 
-def _one_pass(tree, trace, trace_data, claim, quotient, t, n, n_cols, params):
+def _one_pass(pcs, trace, trace_data, claim, quotient, t, n, n_cols):
     tm = _Timer()
-    one = fnp.ones((), F)
-
-    lde_height = n << params.log_blowup
+    params = pcs.params
     with frx.profiler.TraceAnnotation("open_head"):
         trace_local, trace_next, chunk_values, ro, tt = _open_head(
             trace,
@@ -74,12 +78,10 @@ def _one_pass(tree, trace, trace_data, claim, quotient, t, n, n_cols, params):
         )
     tm.lap("open_head(ood+obs+ro)", (ro, tt.state.sponge_state))
 
-    from pico_zorch.commit.pcs_commit import CommitData
-
     code = BitReversedReedSolomon(n, 1 << params.log_blowup, F)
     with frx.profiler.TraceAnnotation("fold_chain"):
         final_poly, roots, layers, tt = fold_chain(
-            tree, code, params.log_blowup, ro, tt
+            pcs.tree, code, params.log_blowup, ro, tt
         )
     phase_data = [
         CommitData((leaves,), leaves, list(digest_layers))
@@ -99,10 +101,10 @@ def _one_pass(tree, trace, trace_data, claim, quotient, t, n, n_cols, params):
     idx = fnp.asarray(indices.astype(np.int32))
     with frx.profiler.TraceAnnotation("open_batch"):
         opens = [
-            open_batch(tree, trace_data, idx),
-            open_batch(tree, quotient.quotient_data, idx),
+            open_batch(pcs.tree, trace_data, idx),
+            open_batch(pcs.tree, quotient.quotient_data, idx),
         ] + [
-            open_batch(tree, data, idx >> (layer + 1))
+            open_batch(pcs.tree, data, idx >> (layer + 1))
             for layer, data in enumerate(phase_data)
         ]
     tm.lap(f"open_batch[{len(opens)} trees]", opens)
@@ -115,10 +117,11 @@ def profile(degree_bits: int, n_cols: int, params: FriParams, trace_dir: str) ->
     air = _WideFibAir(width=n_cols)
     pv = fnp.array([0, 1, int(fib[-1, 1])], dtype=F)
     _, _, tree = koalabear16_merkle()
+    pcs = FriOpener(tree, params)
 
-    trace_root, trace_data = commit_pcs(tree, [trace], params.log_blowup)
+    trace_root, trace_data = pcs.commit([trace], shifts=[GENERATOR])
     t = bind_instance(fresh_challenger(), degree_bits, trace_root, pv)
-    q = QuotientProver(tree, params).prove(
+    q = QuotientProver(pcs).prove(
         QuotientClaim(air, pv, degree_bits, trace_root),
         QuotientWitness(trace, trace_data),
         t,
@@ -139,7 +142,7 @@ def profile(degree_bits: int, n_cols: int, params: FriParams, trace_dir: str) ->
         )
         with ctx:
             _one_pass(
-                tree, trace, trace_data, claim, quotient, q.transcript, n, n_cols, params
+                pcs, trace, trace_data, claim, quotient, q.transcript, n, n_cols
             )
     if trace_dir:
         print(f"profiler trace written to {trace_dir}")

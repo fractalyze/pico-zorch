@@ -20,10 +20,10 @@ from zk_dtypes import koalabear_mont as F
 
 from pico_zorch.challenger.challenger import fresh_challenger
 from pico_zorch.poseidon2.koalabear import koalabear16_merkle
-from pico_zorch.uni_stark.fri_stage import query_opening
+from pico_zorch.uni_stark.fri import FriOpener, query_opening
 from pico_zorch.uni_stark.prover import StarkProver
 from pico_zorch.uni_stark.testing.fib_air import FibonacciAir, generate_trace_rows
-from pico_zorch.uni_stark.types import FriParams, StarkClaim, StarkWitness
+from pico_zorch.uni_stark.types import StarkClaim, StarkWitness
 
 _GOLDEN = pathlib.Path(__file__).parent / "testdata" / "golden" / "fib_prove.json"
 
@@ -47,7 +47,7 @@ class FibE2eTest(absltest.TestCase):
         pv = fnp.array(cls.golden["public_values"], dtype=F)
         claim = StarkClaim(air=air, public_values=pv, degree_bits=3)
         _, _, tree = koalabear16_merkle()
-        prover = StarkProver(tree=tree, params=FriParams())
+        prover = StarkProver(FriOpener(tree))
         cls.result = prover.prove(claim, StarkWitness(trace), fresh_challenger())
 
     def test_commitments(self) -> None:
