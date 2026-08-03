@@ -65,7 +65,7 @@ prover's sponge already runs on device, so all of it lowers to one program.
 Export a core per instance shape, then prove:
 
 ```sh
-FRX_PLATFORMS=cuda bazel run //export:export_pico_core -- --degree_bits=20 --width=32
+FRX_PLATFORMS=cuda bazel run //export:export_uni_stark_core -- --degree_bits=20 --width=32
 ```
 
 See [`rust/README.md`](rust/README.md) for setup, the wire representation, and

@@ -25,7 +25,7 @@ pub fn prove(
     public_values: &[Val],
 ) -> Result<p3_uni_stark::Proof<MyConfig>, String> {
     let path = std::env::var(CORE_ENV)
-        .map_err(|_| format!("set {CORE_ENV} to an exported pico core .mlirbc"))?;
+        .map_err(|_| format!("set {CORE_ENV} to an exported uni-stark core .mlirbc"))?;
     prove_at(Path::new(&path), trace, public_values)
 }
 

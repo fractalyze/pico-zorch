@@ -23,7 +23,7 @@ from absl.testing import absltest
 from frx import lax
 from zk_dtypes import koalabear_mont as F
 
-from export.export_pico_core import core_fn, output_names
+from export.export_uni_stark_core import core_fn, output_names
 from pico_zorch.uni_stark.testing.fib_air import FibonacciAir, generate_trace_rows
 from pico_zorch.uni_stark.types import FriParams
 

@@ -7,8 +7,8 @@ load("//:defs.bzl", "GPU_PLUGIN_DEPS")
 # lower against the same plugin the binding compiles with, hence the plugin
 # deps.
 py_binary(
-    name = "export_pico_core",
-    srcs = ["export_pico_core.py"],
+    name = "export_uni_stark_core",
+    srcs = ["export_uni_stark_core.py"],
     visibility = ["//visibility:public"],
     deps = [
         "//pico_zorch/challenger",
@@ -27,12 +27,12 @@ py_binary(
 # Pins the traced-as-one-program path against the same golden `fib_e2e_test`
 # pins the eager composite against.
 py_test(
-    name = "export_pico_core_test",
+    name = "export_uni_stark_core_test",
     size = "large",
-    srcs = ["export_pico_core_test.py"],
+    srcs = ["export_uni_stark_core_test.py"],
     data = ["//pico_zorch/uni_stark:testdata/golden/fib_prove.json"],
     deps = [
-        ":export_pico_core",
+        ":export_uni_stark_core",
         "//pico_zorch/uni_stark:fib_air",
         "//pico_zorch/uni_stark:types",
         requirement("absl_py"),

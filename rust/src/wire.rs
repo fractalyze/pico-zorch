@@ -13,7 +13,7 @@
 //! avoided in performance critical implementations".
 //!
 //! The representation agreement is load-bearing and therefore pinned by a
-//! test on the Python side (`export_pico_core_test.WireRepresentationTest`),
+//! test on the Python side (`export_uni_stark_core_test.WireRepresentationTest`),
 //! so a change in either library fails as an assertion rather than as an
 //! inexplicable proof mismatch.
 //!

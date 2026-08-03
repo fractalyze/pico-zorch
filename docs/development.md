@@ -40,7 +40,7 @@ overrides with `--test_env=FRX_PLATFORMS=cuda`. The byte-match fixtures under
 core, so the dev loop is export-then-test:
 
 ```sh
-FRX_PLATFORMS=cuda bazel run //export:export_pico_core -- --degree_bits=3 --width=2
+FRX_PLATFORMS=cuda bazel run //export:export_uni_stark_core -- --degree_bits=3 --width=2
 cd rust && cargo test                       # reassembly, no GPU needed
 ```
 
@@ -52,7 +52,7 @@ has the env setup. Two things bite:
 - **`--test-threads=1` for the GPU tests.** A second PJRT client in one process
   aborts, so parallel test threads take the whole binary down.
 
-`//export:export_pico_core_test` pins the traced-as-one-program path against the
+`//export:export_uni_stark_core_test` pins the traced-as-one-program path against the
 same golden vector `fib_e2e_test` pins the eager composite against — the two
 fail together if the export drifts from the prover.
 

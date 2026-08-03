@@ -1,5 +1,5 @@
 # Copyright 2026 The pico-zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""Export the fused Pico uni-stark core: one executable per instance shape.
+"""Export the fused uni-stark core: one executable per instance shape.
 
 Unlike a Groth16 back-end, a STARK does not split into "cheap CPU head, one
 fused kernel, cheap CPU tail" — Fiat-Shamir interleaves the transcript with
@@ -12,6 +12,11 @@ what lets the *whole* proof lower to a single program:
 The trace commitment, quotient, FRI commit phase, grind and query openings all
 land in that one program, so the only host round trip in a proof is reading the
 finished proof back.
+
+Named for what it is: this core reproduces `p3_uni_stark::prove`, which Pico's
+machine prover does not call (`vm/src/machine/prover.rs` runs a multi-chip
+protocol and reaches these kernels through the `Pcs` trait). Calling it a "pico
+core" would claim a scope it does not have.
 
 Shape specialization: the AIR, trace height and width trace in, so an
 executable is fixed to one `(air, degree_bits, width)` and the trace *values*
@@ -30,7 +35,7 @@ from what the executable returns.
 
 Run under the Bazel-provided interpreter (see docs/development.md):
 
-    bazel run //export:export_pico_core -- --degree_bits=3 --width=2
+    bazel run //export:export_uni_stark_core -- --degree_bits=3 --width=2
 """
 
 from __future__ import annotations
@@ -225,7 +230,7 @@ def main() -> None:
     module.operation.write_bytecode(buf)
 
     ART.mkdir(parents=True, exist_ok=True)
-    stem = f"pico_core_{args.air}_d{args.degree_bits}_w{args.width}"
+    stem = f"uni_stark_core_{args.air}_d{args.degree_bits}_w{args.width}"
     (ART / f"{stem}.mlirbc").write_bytes(buf.getvalue())
 
     manifest = {

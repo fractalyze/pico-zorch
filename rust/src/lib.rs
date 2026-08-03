@@ -25,7 +25,7 @@
 //! input. Export one per shape:
 //!
 //! ```sh
-//! bazel run //export:export_pico_core -- --degree_bits=20 --width=32
+//! bazel run //export:export_uni_stark_core -- --degree_bits=20 --width=32
 //! ```
 //!
 //! # Transcript

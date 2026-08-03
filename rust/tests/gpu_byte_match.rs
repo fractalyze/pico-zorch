@@ -4,14 +4,14 @@
 //! a core exported for the same instance, so it is `#[ignore]`d by default:
 //!
 //! ```sh
-//! bazel run //export:export_pico_core -- --degree_bits=3 --width=2
-//! export PICO_ZORCH_CORE_MLIRBC=$PWD/../artifacts/pico_core_fib_d3_w2.mlirbc
+//! bazel run //export:export_uni_stark_core -- --degree_bits=3 --width=2
+//! export PICO_ZORCH_CORE_MLIRBC=$PWD/../artifacts/uni_stark_core_fib_d3_w2.mlirbc
 //! export XLA_PJRT_PLUGIN=<...>/frx_plugins/xla_cuda12/xla_cuda_plugin.so
 //! cargo test --test gpu_byte_match -- --ignored
 //! ```
 //!
 //! The instance matches `golden/`'s fixture generator, so a failure here and a
-//! failure in `//export:export_pico_core_test` point at the same drift from
+//! failure in `//export:export_uni_stark_core_test` point at the same drift from
 //! opposite sides.
 
 use std::path::Path;
@@ -21,7 +21,7 @@ use p3_matrix::Matrix;
 use pico_zorch::{config, pico_perm, Challenger, Val};
 use pico_zorch_golden::{fib_trace, FibonacciAir};
 
-/// The shape `export/export_pico_core.py --degree_bits=3 --width=2` produces.
+/// The shape `export/export_uni_stark_core.py --degree_bits=3 --width=2` produces.
 const DEGREE_BITS: usize = 3;
 const WIDTH: usize = 2;
 

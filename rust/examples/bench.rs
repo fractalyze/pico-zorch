@@ -2,7 +2,7 @@
 //! times the reference CPU prover on, so the two numbers can be divided.
 //!
 //! ```sh
-//! bazel run //export:export_pico_core -- --degree_bits=16 --width=32
+//! bazel run //export:export_uni_stark_core -- --degree_bits=16 --width=32
 //! cargo run --release --example bench -- 16 32 5
 //! ```
 //!
@@ -51,7 +51,7 @@ fn core_path(degree_bits: usize, width: usize) -> PathBuf {
         .parent()
         .expect("crate has a parent directory")
         .join("artifacts");
-    root.join(format!("pico_core_fib_d{degree_bits}_w{width}.mlirbc"))
+    root.join(format!("uni_stark_core_fib_d{degree_bits}_w{width}.mlirbc"))
 }
 
 fn ms(d: Duration) -> f64 {
@@ -77,7 +77,7 @@ fn main() {
     );
 
     let core = pico_zorch::gpu::load(&path).unwrap_or_else(|e| {
-        panic!("{e}\n  export it: bazel run //export:export_pico_core -- --degree_bits={degree_bits} --width={width}")
+        panic!("{e}\n  export it: bazel run //export:export_uni_stark_core -- --degree_bits={degree_bits} --width={width}")
     });
 
     // Correctness gate. The serial reference is the byte-match contract; if

@@ -48,8 +48,8 @@ executable is fixed to one `(air, degree_bits, width)`; the trace *values* are a
 runtime input. Export one per instance shape:
 
 ```sh
-FRX_PLATFORMS=cuda bazel run //export:export_pico_core -- --degree_bits=3 --width=2
-# -> artifacts/pico_core_fib_d3_w2.mlirbc  (+ .json manifest)
+FRX_PLATFORMS=cuda bazel run //export:export_uni_stark_core -- --degree_bits=3 --width=2
+# -> artifacts/uni_stark_core_fib_d3_w2.mlirbc  (+ .json manifest)
 ```
 
 Export against the backend you will run on. The manifest beside the bytecode
@@ -63,7 +63,7 @@ name, so adding a proof field cannot silently shift a decode by one.
 cargo test
 
 # The byte-match contract (needs a GPU and a matching core):
-export PICO_ZORCH_CORE_MLIRBC=$PWD/../artifacts/pico_core_fib_d3_w2.mlirbc
+export PICO_ZORCH_CORE_MLIRBC=$PWD/../artifacts/uni_stark_core_fib_d3_w2.mlirbc
 cargo test --test gpu_byte_match -- --ignored --test-threads=1
 ```
 
@@ -115,7 +115,7 @@ Montgomery reduction per element on both sides, 33M of them per proof for a
 2^20 x 32 trace.
 
 That agreement is load-bearing, so it is pinned from both directions:
-`export_pico_core_test.WireRepresentationTest` on the Python side and
+`export_uni_stark_core_test.WireRepresentationTest` on the Python side and
 `wire::tests::montgomery_constant_matches_the_exporter` here. A change in either
 library fails as a one-line assertion instead of an unexplainable proof
 mismatch.

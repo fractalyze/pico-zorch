@@ -1,6 +1,6 @@
 //! The exported core's self-description.
 //!
-//! `export/export_pico_core.py` writes one of these beside every `.mlirbc`.
+//! `export/export_uni_stark_core.py` writes one of these beside every `.mlirbc`.
 //! Binding buffers by name rather than by position is what keeps the two sides
 //! honest: adding a proof field shifts every later index, and an off-by-one
 //! there would not fail loudly — it would decode one field's bytes as another
@@ -90,7 +90,7 @@ impl Manifest {
             return Err(format!(
                 "core was exported for degree_bits={} width={} but this instance is \
                  degree_bits={degree_bits} width={width} — re-export: \
-                 bazel run //export:export_pico_core -- --degree_bits={degree_bits} \
+                 bazel run //export:export_uni_stark_core -- --degree_bits={degree_bits} \
                  --width={width}",
                 self.degree_bits, self.width
             ));
