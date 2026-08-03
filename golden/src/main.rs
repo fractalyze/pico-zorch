@@ -23,6 +23,7 @@ use p3_challenger::{
 };
 use p3_commit::Pcs;
 use p3_field::{Field, FieldAlgebra, FieldExtensionAlgebra, PrimeField32, TwoAdicField};
+use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use p3_symmetric::Permutation;
 use p3_uni_stark::{prove, verify};
@@ -161,6 +162,88 @@ fn emit_trace_commit(out: &str) {
     );
 }
 
+
+/// A **mixed-height** batched commit — the shape Pico's `commit_main` actually
+/// uses, where every chip's main trace goes into one `pcs.commit` at whatever
+/// height that chip ran to.
+///
+/// This is the case a single-matrix commit cannot stand in for. Plonky3 sorts
+/// the matrices tallest-first, hashes the tallest into the leaf layer, then at
+/// each subsequent layer *injects* the matrices whose padded height equals that
+/// layer's length, hashing their rows alongside the compression output. Two
+/// matrices share the tallest height here on purpose: that path hashes several
+/// matrices' rows into one leaf, which is distinct from the injection path.
+///
+/// Heights are exact powers of two because Plonky3 rejects a batch where two
+/// matrices round up to the same power of two without being equal.
+fn emit_batch_commit(out: &str) {
+    // (height, width) per matrix, in the order they are handed to `commit`.
+    // Deliberately not sorted by height: the reference sorts internally, so
+    // feeding it pre-sorted would hide an ordering bug in a consumer.
+    const SHAPES: [(usize, usize); 4] = [(4, 3), (16, 2), (8, 1), (16, 4)];
+
+    use p3_dft::TwoAdicSubgroupDft;
+
+    let p = pcs();
+    let dft = Dft::default();
+
+    let matrices: Vec<RowMajorMatrix<Val>> = SHAPES
+        .iter()
+        .enumerate()
+        .map(|(m, &(height, width))| {
+            // Distinct, position-dependent values so a matrix landing in the
+            // wrong slot cannot coincidentally still match.
+            let values = (0..height * width)
+                .map(|i| Val::from_canonical_usize(1 + i + 100 * m))
+                .collect();
+            RowMajorMatrix::new(values, width)
+        })
+        .collect();
+
+    let domains_and_matrices = matrices
+        .iter()
+        .map(|mat| {
+            let domain = <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(
+                &p,
+                mat.height(),
+            );
+            (domain, mat.clone())
+        })
+        .collect::<Vec<_>>();
+
+    let (commit, _data) =
+        <MyPcs as Pcs<Challenge, Challenger>>::commit(&p, domains_and_matrices);
+    let commit: [Val; 8] = commit.into();
+
+    // Each matrix's coset LDE in natural order, so the Python side can pin the
+    // extension separately from the mixed-height tree it feeds.
+    let per_matrix = matrices
+        .iter()
+        .map(|mat| {
+            let lde = dft
+                .coset_lde_batch(mat.clone(), LOG_BLOWUP, Val::GENERATOR)
+                .to_row_major_matrix();
+            json!({
+                "height": mat.height(),
+                "width": mat.width(),
+                "values": (0..mat.height()).map(|r| ser_fs(&mat.row_slice(r))).collect::<Vec<_>>(),
+                "lde_natural_order": (0..lde.height())
+                    .map(|r| ser_fs(&lde.row_slice(r)))
+                    .collect::<Vec<_>>(),
+            })
+        })
+        .collect::<Vec<_>>();
+
+    write_json(
+        out,
+        &json!({
+            "log_blowup": LOG_BLOWUP,
+            "matrices": per_matrix,
+            "root": ser_fs(&commit),
+        }),
+    );
+}
+
 /// The full uni-stark proof for the reference Fibonacci AIR, plus the
 /// challenges a verifier derives up to the PCS opening — enough to byte-match
 /// each pipeline stage before the proof as a whole.
@@ -257,6 +340,9 @@ fn main() {
     ));
     emit_trace_commit(&format!(
         "{root}/pico_zorch/uni_stark/testdata/golden/trace_commit.json"
+    ));
+    emit_batch_commit(&format!(
+        "{root}/pico_zorch/uni_stark/testdata/golden/batch_commit.json"
     ));
     emit_fib_prove(&format!(
         "{root}/pico_zorch/uni_stark/testdata/golden/fib_prove.json"
