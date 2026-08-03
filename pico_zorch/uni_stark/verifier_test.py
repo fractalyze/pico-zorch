@@ -15,6 +15,7 @@ from zk_dtypes import koalabear_mont as F
 
 from pico_zorch.challenger.challenger import fresh_challenger
 from pico_zorch.poseidon2.koalabear import koalabear16_merkle
+from pico_zorch.uni_stark.fri import FriOpener, FriOpeningVerifier
 from pico_zorch.uni_stark.prover import StarkProver
 from pico_zorch.uni_stark.testing.fib_air import FibonacciAir, generate_trace_rows
 from pico_zorch.uni_stark.types import FriParams, StarkClaim, StarkWitness
@@ -39,11 +40,11 @@ class VerifierTest(absltest.TestCase):
     def setUpClass(cls) -> None:
         super().setUpClass()
         cls.claim, trace, cls.tree = _setup()
-        prover = StarkProver(tree=cls.tree, params=_PARAMS)
+        prover = StarkProver(FriOpener(cls.tree, _PARAMS))
         cls.result = prover.prove(cls.claim, StarkWitness(trace), fresh_challenger())
 
     def test_honest_proof_verifies(self) -> None:
-        verifier = StarkVerifier(tree=self.tree, params=_PARAMS)
+        verifier = StarkVerifier(FriOpeningVerifier(self.tree, _PARAMS))
         out = verifier.verify(
             self.claim, self.result.reduction_proof, fresh_challenger()
         )
@@ -68,7 +69,7 @@ class VerifierTest(absltest.TestCase):
         tampered = dataclasses.replace(
             proof, opening=dataclasses.replace(proof.opening, trace_local=bumped)
         )
-        verifier = StarkVerifier(tree=self.tree, params=_PARAMS)
+        verifier = StarkVerifier(FriOpeningVerifier(self.tree, _PARAMS))
         out = verifier.verify(self.claim, tampered, fresh_challenger())
         self.assertFalse(bool(out.ok))
 
@@ -76,7 +77,7 @@ class VerifierTest(absltest.TestCase):
         wrong = dataclasses.replace(
             self.claim, public_values=fnp.array([0, 1, 22], dtype=F)
         )
-        verifier = StarkVerifier(tree=self.tree, params=_PARAMS)
+        verifier = StarkVerifier(FriOpeningVerifier(self.tree, _PARAMS))
         out = verifier.verify(wrong, self.result.reduction_proof, fresh_challenger())
         self.assertFalse(bool(out.ok))
 

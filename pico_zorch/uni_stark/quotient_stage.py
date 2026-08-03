@@ -29,23 +29,20 @@ from functools import partial
 
 import frx
 import frx.numpy as fnp
-from frx import Array
+from frx import Array, lax
 from zk_dtypes import koalabear_mont as F
 
-from zorch.commit.merkle import MerkleTree
 from zorch.stage import ProveResult, ProverStage, VerifierStage, VerifyResult
-from zorch.transcript import DuplexTranscript
 
-from pico_zorch.challenger.challenger import sample_ext
-from pico_zorch.commit.pcs_commit import GENERATOR, bit_reverse_rows, commit_pcs
+from pico_zorch.challenger.challenger import PicoTranscript
 from pico_zorch.uni_stark.domain import Coset
+from pico_zorch.uni_stark.fri import GENERATOR, FriOpener
 from pico_zorch.uni_stark.quotient import (
     flatten_to_base,
     log_quotient_degree,
     quotient_values,
 )
 from pico_zorch.uni_stark.types import (
-    FriParams,
     QuotientClaim,
     QuotientData,
     QuotientProof,
@@ -63,7 +60,7 @@ def _quotient_flat(air, log_n, log_qd, lde, public_values, alpha):
     sub-coset — the reference's `get_evaluations_on_domain`."""
     trace_domain = Coset(log_n, fnp.ones((), F))
     quotient_domain = Coset(log_n + log_qd, fnp.array(GENERATOR, dtype=F))
-    trace_on_qd = bit_reverse_rows(lde[: quotient_domain.size])
+    trace_on_qd = lax.bit_reverse(lde[: quotient_domain.size], dimensions=(0,))
     return flatten_to_base(
         quotient_values(
             air, public_values, trace_domain, quotient_domain, trace_on_qd, alpha
@@ -74,25 +71,24 @@ def _quotient_flat(air, log_n, log_qd, lde, public_values, alpha):
 @dataclass(frozen=True)
 class QuotientProver(
     ProverStage[
-        QuotientClaim, QuotientWitness, TraceOpeningClaim, QuotientProof, DuplexTranscript
+        QuotientClaim, QuotientWitness, TraceOpeningClaim, QuotientProof, PicoTranscript
     ]
 ):
-    tree: MerkleTree
-    params: FriParams = FriParams()
+    pcs: FriOpener
 
     def prove(
         self,
         claim: QuotientClaim,
         witness: QuotientWitness,
-        transcript: DuplexTranscript,
-    ) -> ProveResult[TraceOpeningClaim, QuotientProof, DuplexTranscript]:
+        transcript: PicoTranscript,
+    ) -> ProveResult[TraceOpeningClaim, QuotientProof, PicoTranscript]:
         log_n = claim.degree_bits
         generator = fnp.array(GENERATOR, dtype=F)
         trace_domain = Coset(log_n, fnp.ones((), F))
         log_qd = log_quotient_degree(claim.air.constraint_degree)
         quotient_degree = 1 << log_qd
 
-        t, alpha = sample_ext(transcript)
+        t, alpha = transcript.sample_ext()
 
         quotient_domain = Coset(log_n + log_qd, generator)
         q_flat = _quotient_flat(
@@ -105,15 +101,13 @@ class QuotientProver(
         )
         chunks = quotient_domain.split_evals(quotient_degree, q_flat)
         qc_domains = quotient_domain.split_domains(quotient_degree)
-        quotient_root, quotient_data = commit_pcs(
-            self.tree,
+        quotient_root, quotient_data = self.pcs.commit(
             chunks,
-            self.params.log_blowup,
             shifts=[generator / d.shift for d in qc_domains],
         )
 
         t = t.observe(quotient_root)
-        t, zeta = sample_ext(t)
+        t, zeta = t.sample_ext()
 
         reduced = TraceOpeningClaim(
             trace_root=claim.trace_root,
@@ -122,6 +116,8 @@ class QuotientProver(
             zeta=zeta,
             zeta_next=trace_domain.next_point(zeta),
             degree_bits=log_n,
+            width=claim.air.width,
+            quotient_degree=quotient_degree,
         )
         proof = QuotientProof(
             quotient_root, QuotientData(chunks, qc_domains, quotient_data)
@@ -131,22 +127,20 @@ class QuotientProver(
 
 @dataclass(frozen=True)
 class QuotientVerifier(
-    VerifierStage[QuotientClaim, TraceOpeningClaim, QuotientProof, DuplexTranscript]
+    VerifierStage[QuotientClaim, TraceOpeningClaim, QuotientProof, PicoTranscript]
 ):
-    params: FriParams = FriParams()
-
     def verify(
         self,
         claim: QuotientClaim,
         reduction_proof: QuotientProof,
-        transcript: DuplexTranscript,
-    ) -> VerifyResult[TraceOpeningClaim, DuplexTranscript]:
+        transcript: PicoTranscript,
+    ) -> VerifyResult[TraceOpeningClaim, PicoTranscript]:
         log_n = claim.degree_bits
         trace_domain = Coset(log_n, fnp.ones((), F))
 
-        t, alpha = sample_ext(transcript)
+        t, alpha = transcript.sample_ext()
         t = t.observe(reduction_proof.quotient_root)
-        t, zeta = sample_ext(t)
+        t, zeta = t.sample_ext()
 
         reduced = TraceOpeningClaim(
             trace_root=claim.trace_root,
@@ -155,5 +149,7 @@ class QuotientVerifier(
             zeta=zeta,
             zeta_next=trace_domain.next_point(zeta),
             degree_bits=log_n,
+            width=claim.air.width,
+            quotient_degree=1 << log_quotient_degree(claim.air.constraint_degree),
         )
         return VerifyResult(reduced, t, fnp.array(True))

@@ -24,18 +24,15 @@ from frx import Array, lax
 from zk_dtypes import koalabear_mont as F
 from zk_dtypes import koalabearx4_mont as EF
 
-from zorch.commit.merkle import MerkleTree
 from zorch.stage import TrivialClaim, VerifierStage, VerifyResult
-from zorch.transcript import DuplexTranscript
 
-from pico_zorch.commit.pcs_commit import GENERATOR
+from pico_zorch.challenger.challenger import PicoTranscript
 from pico_zorch.uni_stark.domain import Coset
-from pico_zorch.uni_stark.fri_stage import FriOpeningVerifier
+from pico_zorch.uni_stark.fri import GENERATOR, FriOpeningVerifier
 from pico_zorch.uni_stark.prover import bind_instance
 from pico_zorch.uni_stark.quotient import log_quotient_degree
 from pico_zorch.uni_stark.quotient_stage import QuotientVerifier
 from pico_zorch.uni_stark.types import (
-    FriParams,
     QuotientClaim,
     QuotientProof,
     StarkClaim,
@@ -100,23 +97,22 @@ def _ood_identity(
 
 @dataclass(frozen=True)
 class StarkVerifier(
-    VerifierStage[StarkClaim, TrivialClaim, StarkProof, DuplexTranscript]
+    VerifierStage[StarkClaim, TrivialClaim, StarkProof, PicoTranscript]
 ):
-    tree: MerkleTree
-    params: FriParams = FriParams()
+    pcs: FriOpeningVerifier
 
     def verify(
         self,
         claim: StarkClaim,
         reduction_proof: StarkProof,
-        transcript: DuplexTranscript,
-    ) -> VerifyResult[TrivialClaim, DuplexTranscript]:
+        transcript: PicoTranscript,
+    ) -> VerifyResult[TrivialClaim, PicoTranscript]:
         proof = reduction_proof
         t = bind_instance(
             transcript, proof.degree_bits, proof.trace_root, claim.public_values
         )
 
-        quotient = QuotientVerifier(self.params).verify(
+        quotient = QuotientVerifier().verify(
             QuotientClaim(
                 claim.air, claim.public_values, proof.degree_bits, proof.trace_root
             ),
@@ -124,12 +120,9 @@ class StarkVerifier(
             t,
         )
 
-        opening = FriOpeningVerifier(
-            tree=self.tree,
-            width=claim.air.width,
-            quotient_degree=1 << log_quotient_degree(claim.air.constraint_degree),
-            params=self.params,
-        ).verify(quotient.reduced_claim, proof.opening, quotient.transcript)
+        opening = self.pcs.verify(
+            quotient.reduced_claim, proof.opening, quotient.transcript
+        )
 
         ok = quotient.ok & opening.ok
         ok = ok & _ood_identity(claim, quotient.reduced_claim, proof)

@@ -9,8 +9,7 @@ subgroup the NTT already knows how to evaluate on.
 
 Mirrors the reference `TwoAdicMultiplicativeCoset` (Plonky3
 commit/src/domain.rs at brevis-network/Plonky3@7fbe1908). Natural domain
-order throughout — the bit-reversed committed layout is
-`pico_zorch.commit`'s concern."""
+order throughout — the bit-reversed committed layout is the PCS's concern."""
 
 from __future__ import annotations
 

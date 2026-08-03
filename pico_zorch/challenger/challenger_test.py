@@ -14,11 +14,7 @@ from absl.testing import absltest
 from frx import lax
 from zk_dtypes import koalabear_mont as F
 
-from pico_zorch.challenger.challenger import (
-    fresh_challenger,
-    sample_bits,
-    sample_ext,
-)
+from pico_zorch.challenger.challenger import fresh_challenger
 
 _GOLDEN = pathlib.Path(__file__).parent / "testdata" / "golden" / "challenger.json"
 
@@ -39,7 +35,7 @@ class ChallengerTest(absltest.TestCase):
         self.assertEqual(list(got), steps[0]["out"], msg=steps[0]["op"])
 
         t = t.observe(fnp.array(list(range(100, 111)), dtype=F))
-        t, e1 = sample_ext(t)
+        t, e1 = t.sample_ext()
         got_ext = _canonical(lax.bitcast_convert_type(e1, fnp.uint32)).reshape(-1)
         # bitcast gives Montgomery limbs; convert each limb via a field view.
         limbs = lax.bitcast_convert_type(e1, F).reshape(-1)
@@ -48,7 +44,7 @@ class ChallengerTest(absltest.TestCase):
 
         got_bits = []
         for bits in (4, 16, 24):
-            t, b = sample_bits(t, bits)
+            t, b = t.sample_bits(bits)
             got_bits.append(int(b))
         self.assertEqual(got_bits, steps[2]["out"], msg=steps[2]["op"])
 

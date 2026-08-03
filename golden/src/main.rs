@@ -256,7 +256,7 @@ fn main() {
         "{root}/pico_zorch/challenger/testdata/golden/challenger.json"
     ));
     emit_trace_commit(&format!(
-        "{root}/pico_zorch/commit/testdata/golden/trace_commit.json"
+        "{root}/pico_zorch/uni_stark/testdata/golden/trace_commit.json"
     ));
     emit_fib_prove(&format!(
         "{root}/pico_zorch/uni_stark/testdata/golden/fib_prove.json"

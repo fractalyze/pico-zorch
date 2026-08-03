@@ -1,5 +1,5 @@
 # Copyright 2026 The pico-zorch Authors. SPDX-License-Identifier: Apache-2.0
-"""The FRI opening stage: `TraceOpeningClaim` → `TrivialClaim`.
+"""Pico's FRI-backed PCS opening prover and verifier.
 
 Everything above this point assumed the commitments hold *polynomials*. A
 Merkle root binds an arbitrary function, so what remains is a proximity
@@ -30,6 +30,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import lru_cache, partial
+from typing import Any, Sequence
 
 import frx
 import frx.numpy as fnp
@@ -38,7 +39,7 @@ from frx import Array, lax
 from zk_dtypes import koalabear_mont as F
 from zk_dtypes import koalabearx4_mont as EF
 
-from zorch.coding.reed_solomon import BitReversedReedSolomon
+from zorch.coding.reed_solomon import BitReversedReedSolomon, ReedSolomon
 from zorch.commit.merkle import MerkleTree, Opening
 from zorch.pcs.fold import from_base_field, to_base_field
 from zorch.poly.univariate import powers
@@ -49,17 +50,44 @@ from zorch.stage import (
     VerifierStage,
     VerifyResult,
 )
-from zorch.transcript import DuplexTranscript, TranscriptT
-
-from pico_zorch.challenger.challenger import sample_ext
-from pico_zorch.commit.pcs_commit import GENERATOR, CommitData, commit_matrices
+from pico_zorch.challenger.challenger import PicoTranscript
 from pico_zorch.uni_stark.types import (
+    CommitData,
+    FriParams,
     FriOpeningProof,
     FriOpeningWitness,
-    FriParams,
     FriProof,
     TraceOpeningClaim,
 )
+
+# KoalaBear's multiplicative-group generator: Val::GENERATOR in the reference,
+# and the coset shift for a natural (shift-1) evaluation domain.
+GENERATOR = 3
+
+
+def _canonical_shift(shift: Any, dtype: Any) -> int:
+    """Materialize a protocol-configured field shift as a static JIT key."""
+    field_shift = fnp.asarray(shift, dtype=dtype)
+    canonical = lax.convert_element_type(field_shift, fnp.uint32)
+    return int(np.asarray(canonical))
+
+
+@partial(frx.jit, static_argnames=("tree", "shift_values", "log_blowup"))
+def _commit(tree, evals, shift_values, log_blowup):
+    ldes = []
+    for matrix, shift_value in zip(evals, shift_values):
+        shift = fnp.array(shift_value, dtype=matrix.dtype)
+        code = ReedSolomon(
+            matrix.shape[0],
+            1 << log_blowup,
+            matrix.dtype,
+            coset_shift=shift,
+        )
+        natural = code.extend(matrix.T)
+        ldes.append(lax.bit_reverse(natural, dimensions=(1,)).T)
+    leaves = fnp.concatenate(ldes, axis=1) if len(ldes) > 1 else ldes[0]
+    raw_root, digest_layers = tree.commit(leaves)
+    return tuple(ldes), leaves, raw_root, tuple(digest_layers)
 
 
 def _eval_columns(coeffs: Array, y: Array) -> Array:
@@ -135,7 +163,7 @@ def _open_head(
     )
     opened = fnp.concatenate([trace_local, trace_next, chunk_values.reshape(-1)])
     t = transcript.observe(opened)
-    t, alpha_fri = sample_ext(t)
+    t, alpha_fri = t.sample_ext()
     ro = reduced_openings(
         trace_leaves,
         quotient_leaves,
@@ -171,14 +199,13 @@ def _ood_values(trace, chunks, chunk_shifts, zeta, zeta_next):
 
 
 def sample_query_indices(
-    transcript: TranscriptT, log_max_height: int, count: int
-) -> tuple[TranscriptT, np.ndarray]:
+    transcript: PicoTranscript, log_max_height: int, count: int
+) -> tuple[PicoTranscript, np.ndarray]:
     """`count` × the reference's `sample_bits(log_max_height)`: one squeeze
     each, low bits of the *canonical* value. zorch's `sample_positions`
     reduces the Montgomery bitpattern instead, so it draws other indices."""
-    t, raw = transcript.sample(count)
-    canonical = np.asarray(lax.convert_element_type(raw, fnp.uint32))
-    return t, (canonical & ((1 << log_max_height) - 1)).astype(np.int64)
+    t, indices = transcript.sample_bits_many(log_max_height, count)
+    return t, np.asarray(indices, dtype=np.int64)
 
 
 @partial(frx.jit, static_argnames=("tree",))
@@ -207,7 +234,7 @@ def fold_chain(
     code: BitReversedReedSolomon,
     log_blowup: int,
     ro: Array,
-    transcript: DuplexTranscript,
+    transcript: PicoTranscript,
 ):
     """The FRI commit phase as one device program.
 
@@ -221,7 +248,7 @@ def fold_chain(
         leaves = to_base_field(code.pair_leaves(folded))
         root, digest_layers = tree.commit(leaves)
         t = t.observe(root)
-        t, beta = sample_ext(t)
+        t, beta = t.sample_ext()
         folded = code.fold(folded, beta)
         roots.append(root)
         layers.append((leaves, tuple(digest_layers)))
@@ -243,7 +270,7 @@ def query_opening(batched: Opening, q: int) -> Opening:
 @lru_cache(maxsize=None)
 def _lde_code(n: int, log_blowup: int) -> BitReversedReedSolomon:
     """The code describing the committed layout: same coset and row order
-    `pcs_commit` writes, so its `domain()` is the committed x-coordinates.
+    `FriOpener.commit` writes, so its `domain()` is the committed x-coordinates.
 
     Cached because constructing a coset code eagerly builds a block-length
     powers table."""
@@ -255,20 +282,44 @@ def _lde_code(n: int, log_blowup: int) -> BitReversedReedSolomon:
 @dataclass(frozen=True)
 class FriOpener(
     ProverStage[
-        TraceOpeningClaim, FriOpeningWitness, TrivialClaim, FriOpeningProof, DuplexTranscript
+        TraceOpeningClaim, FriOpeningWitness, TrivialClaim, FriOpeningProof, PicoTranscript
     ]
 ):
     tree: MerkleTree
     params: FriParams = FriParams()
 
+    def commit(
+        self,
+        evals: Sequence[Array],
+        *,
+        shifts: Sequence[Any],
+    ) -> tuple[Array, CommitData]:
+        """Commit evaluation matrices in Pico's bit-reversed FRI layout."""
+        if not evals:
+            raise ValueError("commit requires at least one matrix")
+        heights = {matrix.shape[0] for matrix in evals}
+        if len(heights) != 1:
+            raise ValueError(f"matrices must share a height, got {sorted(heights)}")
+        if len(shifts) != len(evals):
+            raise ValueError(
+                f"expected one shift per matrix, got {len(shifts)} for {len(evals)}"
+            )
+
+        dtype = evals[0].dtype
+        shift_values = tuple(_canonical_shift(shift, dtype) for shift in shifts)
+        ldes, leaves, raw_root, digest_layers = _commit(
+            self.tree, tuple(evals), shift_values, self.params.log_blowup
+        )
+        return raw_root, CommitData(ldes, leaves, list(digest_layers))
+
     def prove(
         self,
         claim: TraceOpeningClaim,
         witness: FriOpeningWitness,
-        transcript: DuplexTranscript,
-    ) -> ProveResult[TrivialClaim, FriOpeningProof, DuplexTranscript]:
-        one = fnp.ones((), F)
-        log_blowup = self.params.log_blowup
+        transcript: PicoTranscript,
+    ) -> ProveResult[TrivialClaim, FriOpeningProof, PicoTranscript]:
+        params = self.params
+        log_blowup = params.log_blowup
         n = witness.trace.shape[0]
         width = witness.trace.shape[1]
         quotient = witness.quotient
@@ -297,9 +348,9 @@ class FriOpener(
             for leaves, digest_layers in layers
         ]
 
-        t, pow_witness = t.grind(self.params.proof_of_work_bits)
+        t, pow_witness = t.grind(params.proof_of_work_bits)
         t, indices = sample_query_indices(
-            t, claim.degree_bits + log_blowup, self.params.num_queries
+            t, claim.degree_bits + log_blowup, params.num_queries
         )
 
         idx = fnp.asarray(indices.astype(np.int32))
@@ -328,24 +379,20 @@ class FriOpener(
 
 @dataclass(frozen=True)
 class FriOpeningVerifier(
-    VerifierStage[TraceOpeningClaim, TrivialClaim, FriOpeningProof, DuplexTranscript]
+    VerifierStage[TraceOpeningClaim, TrivialClaim, FriOpeningProof, PicoTranscript]
 ):
     tree: MerkleTree
-    # Fixed by the AIR, so they configure the role rather than riding the
-    # claim, which carries only what varies per statement.
-    width: int
-    quotient_degree: int
     params: FriParams = FriParams()
 
     def verify(
         self,
         claim: TraceOpeningClaim,
         reduction_proof: FriOpeningProof,
-        transcript: DuplexTranscript,
-    ) -> VerifyResult[TrivialClaim, DuplexTranscript]:
+        transcript: PicoTranscript,
+    ) -> VerifyResult[TrivialClaim, PicoTranscript]:
         proof = reduction_proof
         params = self.params
-        width, quotient_degree = self.width, self.quotient_degree
+        width, quotient_degree = claim.width, claim.quotient_degree
         log_blowup = params.log_blowup
         if proof.trace_local.shape != (width,) or proof.trace_next.shape != (width,):
             raise ValueError("opened trace width does not match the AIR")
@@ -356,12 +403,12 @@ class FriOpeningVerifier(
             [proof.trace_local, proof.trace_next, proof.quotient_chunks.reshape(-1)]
         )
         t = transcript.observe(opened)
-        t, alpha_fri = sample_ext(t)
+        t, alpha_fri = t.sample_ext()
 
         betas = []
         for root in proof.fri.commit_phase_roots:
             t = t.observe(root)
-            t, beta = sample_ext(t)
+            t, beta = t.sample_ext()
             betas.append(beta)
         t = t.observe(proof.fri.final_poly)
         t, ok = t.check_witness(

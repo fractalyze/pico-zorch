@@ -20,16 +20,13 @@ import frx.numpy as fnp
 from frx import Array
 from zk_dtypes import koalabear_mont as F
 
-from zorch.commit.merkle import MerkleTree
 from zorch.stage import ProveResult, ProverStage, TrivialClaim
-from zorch.transcript import DuplexTranscript
 
-from pico_zorch.commit.pcs_commit import commit_pcs
-from pico_zorch.uni_stark.fri_stage import FriOpener
+from pico_zorch.challenger.challenger import PicoTranscript
+from pico_zorch.uni_stark.fri import GENERATOR, FriOpener
 from pico_zorch.uni_stark.quotient_stage import QuotientProver
 from pico_zorch.uni_stark.types import (
     FriOpeningWitness,
-    FriParams,
     QuotientClaim,
     QuotientWitness,
     StarkClaim,
@@ -39,11 +36,11 @@ from pico_zorch.uni_stark.types import (
 
 
 def bind_instance(
-    transcript: DuplexTranscript,
+    transcript: PicoTranscript,
     degree_bits: int,
     trace_root: Array,
     public_values: Array,
-) -> DuplexTranscript:
+) -> PicoTranscript:
     """The reference's instance observation, which must land before any
     challenge is drawn: log_degree, trace commitment, public values."""
     t = transcript.observe(fnp.array([degree_bits], dtype=F))
@@ -53,29 +50,28 @@ def bind_instance(
 
 @dataclass(frozen=True)
 class StarkProver(
-    ProverStage[StarkClaim, StarkWitness, TrivialClaim, StarkProof, DuplexTranscript]
+    ProverStage[StarkClaim, StarkWitness, TrivialClaim, StarkProof, PicoTranscript]
 ):
-    tree: MerkleTree
-    params: FriParams = FriParams()
+    pcs: FriOpener
 
     def prove(
         self,
         claim: StarkClaim,
         witness: StarkWitness,
-        transcript: DuplexTranscript,
-    ) -> ProveResult[TrivialClaim, StarkProof, DuplexTranscript]:
-        trace_root, trace_data = commit_pcs(
-            self.tree, [witness.trace], self.params.log_blowup
+        transcript: PicoTranscript,
+    ) -> ProveResult[TrivialClaim, StarkProof, PicoTranscript]:
+        trace_root, trace_data = self.pcs.commit(
+            [witness.trace], shifts=[GENERATOR]
         )
         t = bind_instance(transcript, claim.degree_bits, trace_root, claim.public_values)
 
-        quotient = QuotientProver(self.tree, self.params).prove(
+        quotient = QuotientProver(self.pcs).prove(
             QuotientClaim(claim.air, claim.public_values, claim.degree_bits, trace_root),
             QuotientWitness(witness.trace, trace_data),
             t,
         )
 
-        opening = FriOpener(self.tree, self.params).prove(
+        opening = self.pcs.prove(
             quotient.reduced_claim,
             FriOpeningWitness(
                 witness.trace, trace_data, quotient.reduction_proof.data

@@ -36,12 +36,13 @@ overrides with `--test_env=FRX_PLATFORMS=cuda`. The byte-match fixtures under
 
 ## Per-stage bench — `bench_prove`
 
-`//pico_zorch/uni_stark:bench_prove` proves for real, mirrors the composite's
-stage order, prints per-stage wall-clock, and at the golden config doubles as
-a byte-match run. `--trace_dir` additionally captures an frx profiler trace
-(perfetto), which is how a stage's wall time is split into device work and
-orchestration; `profile_fri_open` does the same one level down, per
-sub-phase of the opening stage.
+`//pico_zorch/uni_stark:bench_prove` reports two deliberately separate views:
+`[e2e]` runs the composite with one terminal device synchronization, while the
+phase breakdown runs a second proof with a synchronization after each stage.
+The latter attributes work but is not summed into an end-to-end figure. At the
+golden config both runs also byte-match the reference commitments. `--trace_dir`
+additionally captures an frx profiler trace (perfetto), and `profile_fri_open`
+provides the same detail within the opening stage.
 
 ```sh
 FRX_COMPILATION_CACHE_DIR=$HOME/.cache/pico-zorch-frxcc \
@@ -84,12 +85,12 @@ and was caught exactly this way.
 Minimum over converged passes — the least contended sample, and the only
 statistic that does not drift with whatever else the box is doing:
 
-| Stage | 2^16 rows | 2^20 rows |
+| Measurement | 2^16 rows | 2^20 rows |
 |---|---|---|
-| TraceCommit | 0.8 ms | 8.1 ms |
-| Quotient | 1.5 ms | 3.1 ms |
-| FriOpen | 3.4 ms | 8.2 ms |
-| total | 7.1 ms | 21.4 ms |
+| **E2E** | **6.7 ms** (6.7–6.9) | **16.0 ms** (16.0–18.4) |
+| TraceCommit | 0.6 ms (0.6–0.7) | 6.1 ms (6.1–6.3) |
+| Quotient | 1.7 ms (1.7–1.9) | 2.3 ms (2.3–2.8) |
+| FriOpen | 3.4 ms (3.4–3.5) | 7.1 ms (7.1–7.6) |
 
 Re-measure rather than trusting the table across a zorch pin or frx wheel
 bump. A pass reading well above these is a contention signal, not a
@@ -137,13 +138,14 @@ fixture generator must build without it (the grind's `find_any` is only
 reproducible when serial), but Pico's own defaults include rayon, so a
 serial build would understate the reference.
 
-| degree_bits × width | reference CPU, 24 threads | pico-zorch, one RTX 5090 |
-|---|---|---|
-| 2^16 × 32 | 89 ms | 7.1 ms |
-| 2^20 × 32 | 1220 ms | 21.4 ms |
+Compare the reference result only with `[e2e]`, which has one terminal device
+synchronization like the reference's single prover call. Per-phase timings are
+diagnostics, not an end-to-end result.
 
-Read that as a platform comparison, not an implementation verdict: the two
-run the same protocol over the same instance, but a 24-core CPU and a 5090
-are not the same budget. The scaling is the load-bearing part — the gap
-widens with trace height, which is what one expects when the GPU's
-parallelism has more to bite on and fixed overheads amortize.
+Measured on the same host at the pins above:
+
+| Prover | 2^16 rows | 2^20 rows |
+|---|---|---|
+| Reference CPU | 89 ms | 1,220 ms |
+| pico-zorch RTX 5090 `[e2e]` | 6.7 ms | 16.0 ms |
+| Speedup | 13.3x | 76.3x |

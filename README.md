@@ -28,8 +28,8 @@ under Pico's RISCV-phase FRI config (log_blowup 1, 84 queries, 16 PoW bits).
 | Layer | Module | Byte-matched against |
 | --- | --- | --- |
 | Poseidon2 permutation (Pico's RC_16_30 constants) | [`pico_zorch/poseidon2/`](pico_zorch/poseidon2/) | fork permutation vectors |
-| DuplexChallenger flavour | [`pico_zorch/challenger/`](pico_zorch/challenger/) | observe/sample/sample_bits/grind script |
-| TwoAdicFriPcs commit (coset LDE, bit-reversed MMCS) | [`pico_zorch/commit/`](pico_zorch/commit/) | trace LDE + Merkle root |
+| Pico transcript | [`pico_zorch/challenger/`](pico_zorch/challenger/) | observe/sample/sample_bits/grind script |
+| TwoAdicFriPcs (commit, open, verify) | [`pico_zorch/uni_stark/fri.py`](pico_zorch/uni_stark/fri.py) | trace LDE + Merkle root |
 | Quotient, FRI open, prover/verifier stages | [`pico_zorch/uni_stark/`](pico_zorch/uni_stark/) | the complete `p3_uni_stark::prove` proof |
 
 The pipeline is a zorch claim-reduction chain:

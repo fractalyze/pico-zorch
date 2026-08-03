@@ -27,10 +27,9 @@ from frx import lax
 from zk_dtypes import koalabear_mont as F
 
 from pico_zorch.challenger.challenger import fresh_challenger
-from pico_zorch.commit.pcs_commit import commit_pcs
 from pico_zorch.poseidon2.koalabear import koalabear16_merkle
-from pico_zorch.uni_stark.fri_stage import FriOpener
-from pico_zorch.uni_stark.prover import bind_instance
+from pico_zorch.uni_stark.fri import GENERATOR, FriOpener
+from pico_zorch.uni_stark.prover import StarkProver, bind_instance
 from pico_zorch.uni_stark.quotient_stage import QuotientProver
 from pico_zorch.uni_stark.testing.fib_air import FibonacciAir, generate_trace_rows
 from pico_zorch.uni_stark.types import (
@@ -38,6 +37,8 @@ from pico_zorch.uni_stark.types import (
     FriParams,
     QuotientClaim,
     QuotientWitness,
+    StarkClaim,
+    StarkWitness,
 )
 
 _GOLDEN = pathlib.Path(__file__).parent / "testdata" / "golden" / "fib_prove.json"
@@ -104,6 +105,7 @@ def main() -> None:
 
     params = FriParams(num_queries=args.num_queries)
     _, _, tree = koalabear16_merkle()
+    pcs = FriOpener(tree, params)
 
     for degree_bits in args.degree_bits or [10]:
         n = 1 << degree_bits
@@ -113,6 +115,9 @@ def main() -> None:
         )
         air = _WideFibAir(width=args.n_cols)
         pv = fnp.array([0, 1, int(fib[-1, 1])], dtype=F)
+        claim = StarkClaim(air, pv, degree_bits)
+        witness = StarkWitness(trace)
+        prover = StarkProver(pcs)
         is_golden_config = (
             degree_bits == 3 and args.n_cols == 2 and params == FriParams()
         )
@@ -128,18 +133,25 @@ def main() -> None:
                 if args.trace_dir and run == args.runs - 1
                 else contextlib.nullcontext()
             )
-            start = time.perf_counter()
             with ctx:
+                start = time.perf_counter()
+                with frx.profiler.TraceAnnotation("EndToEnd"):
+                    proof = prover.prove(claim, witness, fresh_challenger())
+                    _block(proof)
+                e2e_ms = (time.perf_counter() - start) * 1e3
+                del proof
+                print(f"  [e2e] {e2e_ms:.1f}ms")
+
                 with frx.profiler.TraceAnnotation("TraceCommit"):
                     trace_root, trace_data = _timed(
                         "TraceCommit",
-                        lambda: commit_pcs(tree, [trace], params.log_blowup),
+                        lambda: pcs.commit([trace], shifts=[GENERATOR]),
                     )
                 t = bind_instance(fresh_challenger(), degree_bits, trace_root, pv)
                 with frx.profiler.TraceAnnotation("Quotient"):
                     quotient = _timed(
                         "Quotient",
-                        lambda: QuotientProver(tree, params).prove(
+                        lambda: QuotientProver(pcs).prove(
                             QuotientClaim(air, pv, degree_bits, trace_root),
                             QuotientWitness(trace, trace_data),
                             t,
@@ -148,7 +160,7 @@ def main() -> None:
                 with frx.profiler.TraceAnnotation("FriOpen"):
                     opening = _timed(
                         "FriOpen",
-                        lambda: FriOpener(tree, params).prove(
+                        lambda: pcs.prove(
                             quotient.reduced_claim,
                             FriOpeningWitness(
                                 trace, trace_data, quotient.reduction_proof.data
@@ -157,7 +169,6 @@ def main() -> None:
                         ),
                     )
                 del opening
-            print(f"  [total] {(time.perf_counter() - start) * 1e3:.1f}ms")
             if is_golden_config:
                 _check_golden(trace_root, quotient)
 
