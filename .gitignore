@@ -34,3 +34,9 @@ venv/
 
 # Rust golden harness build output
 /golden/target/
+
+# Exported cores + manifests (build output of //export:export_pico_core)
+/artifacts/
+
+# Rust binding build output
+/rust/target/

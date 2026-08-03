@@ -66,10 +66,17 @@ GENERATOR = 3
 
 
 def _canonical_shift(shift: Any, dtype: Any) -> int:
-    """Materialize a protocol-configured field shift as a static JIT key."""
-    field_shift = fnp.asarray(shift, dtype=dtype)
-    canonical = lax.convert_element_type(field_shift, fnp.uint32)
-    return int(np.asarray(canonical))
+    """Materialize a protocol-configured field shift as a static JIT key.
+
+    Forced to compile-time so this holds inside an enclosing trace as well:
+    a coset shift is a protocol constant, and staging it would make it a
+    tracer that cannot key a jit zone. Callers must pass a shift that is
+    itself trace-independent.
+    """
+    with frx.ensure_compile_time_eval():
+        field_shift = fnp.asarray(shift, dtype=dtype)
+        canonical = lax.convert_element_type(field_shift, fnp.uint32)
+        return int(np.asarray(canonical))
 
 
 @partial(frx.jit, static_argnames=("tree", "shift_values", "log_blowup"))
@@ -200,12 +207,18 @@ def _ood_values(trace, chunks, chunk_shifts, zeta, zeta_next):
 
 def sample_query_indices(
     transcript: PicoTranscript, log_max_height: int, count: int
-) -> tuple[PicoTranscript, np.ndarray]:
+) -> tuple[PicoTranscript, Array]:
     """`count` × the reference's `sample_bits(log_max_height)`: one squeeze
     each, low bits of the *canonical* value. zorch's `sample_positions`
-    reduces the Montgomery bitpattern instead, so it draws other indices."""
-    t, indices = transcript.sample_bits_many(log_max_height, count)
-    return t, np.asarray(indices, dtype=np.int64)
+    reduces the Montgomery bitpattern instead, so it draws other indices.
+
+    The indices stay on device. The prover feeds them straight to the batched
+    opens, so materializing them here would round-trip to the host mid-proof
+    — and would make the prover untraceable as a single program, which the
+    Rust binding's exported core requires. The verifier walks its queries in
+    Python and converts on its own.
+    """
+    return transcript.sample_bits_many(log_max_height, count)
 
 
 @partial(frx.jit, static_argnames=("tree",))
@@ -273,10 +286,14 @@ def _lde_code(n: int, log_blowup: int) -> BitReversedReedSolomon:
     `FriOpener.commit` writes, so its `domain()` is the committed x-coordinates.
 
     Cached because constructing a coset code eagerly builds a block-length
-    powers table."""
-    return BitReversedReedSolomon(
-        n, 1 << log_blowup, F, coset_shift=fnp.array(GENERATOR, dtype=F)
-    )
+    powers table. Forced to compile-time so the cached code is concrete
+    whatever context first asks for it — a code built under a trace would
+    carry a tracer coset shift into the cache and leak it into later eager
+    callers."""
+    with frx.ensure_compile_time_eval():
+        return BitReversedReedSolomon(
+            n, 1 << log_blowup, F, coset_shift=fnp.array(GENERATOR, dtype=F)
+        )
 
 
 @dataclass(frozen=True)
@@ -349,11 +366,10 @@ class FriOpener(
         ]
 
         t, pow_witness = t.grind(params.proof_of_work_bits)
-        t, indices = sample_query_indices(
+        t, idx = sample_query_indices(
             t, claim.degree_bits + log_blowup, params.num_queries
         )
 
-        idx = fnp.asarray(indices.astype(np.int32))
         trees = tuple(
             (d.leaves, tuple(d.digest_layers))
             for d in (witness.trace_data, quotient.quotient_data, *phase_data)
@@ -372,6 +388,7 @@ class FriOpener(
                 trace_openings=trace_open,
                 quotient_openings=quotient_open,
                 commit_phase_openings=list(layer_opens),
+                query_indices=idx,
             ),
         )
         return ProveResult(TrivialClaim(), proof, t)
@@ -419,6 +436,8 @@ class FriOpeningVerifier(
         if len(proof.fri.commit_phase_roots) != log_max_height - log_blowup:
             raise ValueError("commit phase layer count does not match the height")
         t, indices = sample_query_indices(t, log_max_height, params.num_queries)
+        # The query loop below is host-side Python, so the indices land here.
+        indices = np.asarray(indices)
 
         xs_br = _lde_code(1 << claim.degree_bits, log_blowup).domain()
         code = BitReversedReedSolomon(1 << claim.degree_bits, 1 << log_blowup, F)

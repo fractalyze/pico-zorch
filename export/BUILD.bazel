@@ -1,0 +1,44 @@
+load("@rules_python//python:defs.bzl", "py_binary", "py_test")
+load("@pico_zorch_pip//:requirements.bzl", "requirement")
+load("//:defs.bzl", "GPU_PLUGIN_DEPS")
+
+# Lowers the Python prover to the StableHLO bytecode the Rust binding runs.
+# Lowering does not execute the program, so this needs no GPU — but it must
+# lower against the same plugin the binding compiles with, hence the plugin
+# deps.
+py_binary(
+    name = "export_pico_core",
+    srcs = ["export_pico_core.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//pico_zorch/challenger",
+        "//pico_zorch/poseidon2:koalabear",
+        "//pico_zorch/uni_stark:fib_air",
+        "//pico_zorch/uni_stark:fri",
+        "//pico_zorch/uni_stark:prover",
+        "//pico_zorch/uni_stark:quotient",
+        "//pico_zorch/uni_stark:types",
+        requirement("frx"),
+        requirement("numpy"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
+# Pins the traced-as-one-program path against the same golden `fib_e2e_test`
+# pins the eager composite against.
+py_test(
+    name = "export_pico_core_test",
+    size = "large",
+    srcs = ["export_pico_core_test.py"],
+    data = ["//pico_zorch/uni_stark:testdata/golden/fib_prove.json"],
+    deps = [
+        ":export_pico_core",
+        "//pico_zorch/uni_stark:fib_air",
+        "//pico_zorch/uni_stark:types",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
+
