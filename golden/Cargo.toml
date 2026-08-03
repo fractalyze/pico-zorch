@@ -13,20 +13,29 @@ publish = false
 # construction.
 
 [dependencies]
-p3-air = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }
-p3-challenger = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }
-p3-commit = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }
-p3-dft = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }
-p3-field = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }
-p3-fri = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }
-p3-koala-bear = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }
-p3-matrix = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }
-p3-merkle-tree = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }
-p3-poseidon2 = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }
-p3-symmetric = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }
-p3-uni-stark = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }
-p3-util = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }
-p3-maybe-rayon = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }
+# Plonky3 rev is written exactly as Pico writes it (`7fbe190`, the fork
+# rev v2.0.0 vendors). Cargo keys a git source on the rev *string*, not the
+# commit it resolves to, so spelling it differently would give us a second
+# copy of every p3 crate whose types do not unify with Pico's.
+p3-air = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe190" }
+p3-challenger = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe190" }
+p3-commit = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe190" }
+p3-dft = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe190" }
+p3-field = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe190" }
+p3-fri = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe190" }
+p3-koala-bear = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe190" }
+p3-matrix = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe190" }
+p3-merkle-tree = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe190" }
+p3-poseidon2 = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe190" }
+p3-symmetric = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe190" }
+p3-uni-stark = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe190" }
+p3-util = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe190" }
+p3-maybe-rayon = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe190" }
+# The reference septic curve, for the `septic` feature only. Pico's own
+# arithmetic rather than a reimplementation of it from the spec — but pico-vm
+# needs a nightly compiler (`#![feature(const_type_id)]`), so it is optional
+# and the default fixtures keep building on stable.
+pico-vm = { git = "https://github.com/brevis-network/pico.git", tag = "v2.0.0", optional = true }
 serde = "1"
 serde_json = "1"
 
@@ -36,6 +45,9 @@ serde_json = "1"
 # prover the way Pico ships it (its own default features include rayon).
 [features]
 parallel = ["p3-maybe-rayon/parallel"]
+# The septic-curve fixtures. Pulls in pico-vm, which requires nightly:
+#   cargo +nightly run --features septic --bin septic-golden
+septic = ["dep:pico-vm"]
 
 [[bin]]
 name = "pico-zorch-golden"
@@ -44,3 +56,10 @@ path = "src/main.rs"
 [[bin]]
 name = "reference-bench"
 path = "src/bench.rs"
+
+# Separate from the main generator so the stable toolchain still produces
+# every other fixture.
+[[bin]]
+name = "septic-golden"
+path = "src/septic.rs"
+required-features = ["septic"]

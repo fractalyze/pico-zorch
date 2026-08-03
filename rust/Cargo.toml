@@ -10,6 +10,10 @@ description = "Drop-in GPU replacement for p3_uni_stark::prove under Pico's Koal
 [workspace]
 
 [dependencies]
+# Plonky3 rev is written exactly as Pico writes it (`7fbe190`, the fork
+# rev v2.0.0 vendors). Cargo keys a git source on the rev *string*, not the
+# commit it resolves to, so spelling it differently would give us a second
+# copy of every p3 crate whose types do not unify with Pico's.
 # The Pico stark config — KoalaBearPoseidon2 over the Plonky3 fork Pico
 # vendors. `golden/` owns the single definition so the fixture generator, the
 # reference bench and this binding cannot describe different provers; a third
@@ -18,15 +22,15 @@ pico-zorch-golden = { path = "../golden" }
 
 # The same rev golden pins: brevis-network/Plonky3@7fbe1908, the fork Pico
 # v2.0.0 vendors. Cargo unifies these with golden's copies.
-p3-challenger = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }
-p3-commit = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }
-p3-field = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }
-p3-fri = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }
-p3-koala-bear = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }
-p3-matrix = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }
-p3-merkle-tree = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }
-p3-symmetric = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }
-p3-uni-stark = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }
+p3-challenger = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe190" }
+p3-commit = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe190" }
+p3-field = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe190" }
+p3-fri = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe190" }
+p3-koala-bear = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe190" }
+p3-matrix = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe190" }
+p3-merkle-tree = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe190" }
+p3-symmetric = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe190" }
+p3-uni-stark = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe190" }
 
 # Pinned: xla-pjrt is a fast-moving shared repo, so pin the rev rather than
 # tracking main (else `cargo update` can drift onto a breaking change).
@@ -41,4 +45,4 @@ serde_json = "1"
 bincode = "1"
 
 [dev-dependencies]
-p3-air = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }
+p3-air = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe190" }

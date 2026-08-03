@@ -1,0 +1,32 @@
+load("@rules_python//python:defs.bzl", "py_library", "py_test")
+load("@pico_zorch_pip//:requirements.bzl", "requirement")
+load("//:defs.bzl", "GPU_PLUGIN_DEPS")
+
+# KoalaBear^7 and the curve Pico's global interaction argument accumulates over.
+py_library(
+    name = "septic",
+    srcs = [
+        "__init__.py",
+        "curve.py",
+        "extension.py",
+    ],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//pico_zorch",
+        requirement("frx"),
+        requirement("zk_dtypes"),
+    ],
+)
+
+py_test(
+    name = "septic_test",
+    srcs = ["septic_test.py"],
+    data = ["testdata/golden/septic.json"],
+    deps = [
+        ":septic",
+        requirement("absl_py"),
+        requirement("frx"),
+        requirement("numpy"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)
