@@ -57,8 +57,10 @@ pub fn prove_with(
     let degree_bits = log2_strict(trace.height())?;
     core.manifest.expect_instance(degree_bits, trace.width())?;
 
-    let (raw, phases) = gpu::run(core, &trace.values, public_values)?;
+    let (raw, mut phases) = gpu::run(core, &trace.values, public_values)?;
+    let t = std::time::Instant::now();
     let proof = assemble(&core.manifest, &raw)?;
+    phases.assemble = t.elapsed();
     Ok((proof, phases))
 }
 

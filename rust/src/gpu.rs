@@ -55,6 +55,9 @@ pub struct Phases {
     pub dispatch: Duration,
     /// Reading the proof back — dominated by waiting on the computation.
     pub readback: Duration,
+    /// Rebuilding `p3_uni_stark::Proof` from the raw buffers. Pure host work,
+    /// so it is worth watching: it is not amortised by anything.
+    pub assemble: Duration,
 }
 
 /// Compile (once) the core at `path`, or return the cached one.
@@ -127,6 +130,8 @@ pub fn run(
             h2d,
             dispatch,
             readback,
+            // Filled in by the caller, which owns the reassembly.
+            assemble: Duration::default(),
         },
     ))
 }

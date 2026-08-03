@@ -69,6 +69,41 @@ cargo test --test gpu_byte_match -- --ignored --test-threads=1
 
 `--test-threads=1` matters: a second PJRT client in one process aborts.
 
+## Benchmark
+
+RTX 5090 vs the reference CPU prover on the identical instance, widened
+Fibonacci AIR, 84 queries. Each size asserts byte-identity against
+`p3_uni_stark::prove` before it is timed. CPU is built `--features parallel`
+(Pico ships rayon); both figures are the minimum over converged passes.
+
+| rows | CPU (parallel) | GPU | speedup |
+| ---- | -------------- | --- | ------- |
+| 2^16 = 65,536 | 74.6 ms | 8.5 ms | 8.8x |
+| 2^20 = 1,048,576 | 1047.9 ms | 28.4 ms | 36.9x |
+
+### Per-proof phase breakdown (ms)
+
+| rows | total | h2d | dispatch | readback | assemble |
+| ---- | ----- | --- | -------- | -------- | -------- |
+| 2^16 | 8.5 | 0.67 | 2.6 | 1.2 | 4.0 |
+| 2^20 | 28.4 | 8.2 | 12.4 | 1.6 | 6.4 |
+
+Two of those columns are host work, not proving, and both are worth knowing
+before quoting a ratio:
+
+- **`h2d`** is uploading the trace — 134 MB at 2^20 x 32, about 16 GB/s. This
+  is the column the Montgomery wire protects: a canonical wire would add a full
+  host-side pass over that same 134 MB before it could even start.
+- **`assemble`** is rebuilding `p3_uni_stark::Proof` through serde, currently
+  via JSON. At 2^16 that is *half the wall time*. It is pure overhead of the
+  private-fields workaround, independent of trace size, and the obvious next
+  optimization.
+
+The repo's Python bench reports a smaller end-to-end figure at the same sizes
+(`docs/development.md`). That is not a contradiction: it generates its trace on
+device and never leaves the device, so it pays neither `h2d` nor `assemble`.
+Both numbers are honest; this one is what a Rust caller actually sees.
+
 ## The wire
 
 Field elements cross the boundary as **raw Montgomery limbs**, not canonical
