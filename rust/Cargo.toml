@@ -33,7 +33,12 @@ p3-uni-stark = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7
 xla-pjrt = { git = "https://github.com/fractalyze/xla-pjrt", rev = "e955dc16a78af2889e262029400eba7f6a29bb6f" }
 
 serde = { version = "1", features = ["derive"] }
+# Manifest parsing only. The proof reassembly deliberately does NOT use JSON —
+# see `proof::assemble`.
 serde_json = "1"
+# The reassembly hop. Binary and non-self-describing, which is exactly why it
+# is fast: no field names are written or matched.
+bincode = "1"
 
 [dev-dependencies]
 p3-air = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }

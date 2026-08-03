@@ -262,7 +262,19 @@ pub fn assemble(manifest: &Manifest, raw: &[Vec<u8>]) -> Result<p3_uni_stark::Pr
 
     // Both ends of this hop use identical leaf types, so it re-wraps the
     // private outer structs without reinterpreting a single field.
-    let json = serde_json::to_vec(&wire_proof)
+    //
+    // bincode, not JSON. This hop exists only because `Proof`'s fields are
+    // private; it carries no information, so every byte it spends is waste.
+    // JSON made it half the wall time of a 2^16 proof — it wrote field names
+    // and decimal digits for ~84 queries' worth of Merkle paths, then parsed
+    // them back. bincode writes field *order*, which is all a round trip
+    // between two identical shapes needs.
+    //
+    // The cost of dropping names: if p3 ever reorders `Proof`'s fields, this
+    // mis-decodes silently where JSON would have failed on a name mismatch.
+    // `tests/wire_round_trip.rs` compares a rebuilt proof against a real
+    // `p3_uni_stark::prove` output, so that reordering fails there instead.
+    let encoded = bincode::serialize(&wire_proof)
         .map_err(|e| format!("serialize the assembled proof: {e}"))?;
-    serde_json::from_slice(&json).map_err(|e| format!("rebuild p3_uni_stark::Proof: {e}"))
+    bincode::deserialize(&encoded).map_err(|e| format!("rebuild p3_uni_stark::Proof: {e}"))
 }

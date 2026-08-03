@@ -78,31 +78,32 @@ Fibonacci AIR, 84 queries. Each size asserts byte-identity against
 
 | rows | CPU (parallel) | GPU | speedup |
 | ---- | -------------- | --- | ------- |
-| 2^16 = 65,536 | 74.6 ms | 8.5 ms | 8.8x |
-| 2^20 = 1,048,576 | 1047.9 ms | 28.4 ms | 36.9x |
+| 2^16 = 65,536 | 74.6 ms | 5.6 ms | 13.3x |
+| 2^20 = 1,048,576 | 1047.9 ms | 23.4 ms | 44.8x |
 
 ### Per-proof phase breakdown (ms)
 
 | rows | total | h2d | dispatch | readback | assemble |
 | ---- | ----- | --- | -------- | -------- | -------- |
-| 2^16 | 8.5 | 0.67 | 2.6 | 1.2 | 4.0 |
-| 2^20 | 28.4 | 8.2 | 12.4 | 1.6 | 6.4 |
+| 2^16 | 5.6 | 0.55 | 2.5 | 1.3 | 1.3 |
+| 2^20 | 23.4 | 8.2 | 11.8 | 1.6 | 1.9 |
 
-Two of those columns are host work, not proving, and both are worth knowing
-before quoting a ratio:
+Two of those columns are host work rather than proving:
 
-- **`h2d`** is uploading the trace — 134 MB at 2^20 x 32, about 16 GB/s. This
-  is the column the Montgomery wire protects: a canonical wire would add a full
-  host-side pass over that same 134 MB before it could even start.
-- **`assemble`** is rebuilding `p3_uni_stark::Proof` through serde, currently
-  via JSON. At 2^16 that is *half the wall time*. It is pure overhead of the
-  private-fields workaround, independent of trace size, and the obvious next
-  optimization.
+- **`h2d`** is uploading the trace — 134 MB at 2^20 x 32, about 16 GB/s, and
+  now the largest single host cost. This is the column the Montgomery wire
+  protects: a canonical wire would add a full host-side pass over that same
+  134 MB before the upload could start.
+- **`assemble`** is rebuilding `p3_uni_stark::Proof` through serde. It carries
+  no information — it exists purely because `Proof`'s fields are private — so
+  it is overhead by construction. It was *half* the wall time at 2^16 until the
+  hop moved from JSON to bincode; what is left is close to the floor for
+  materializing the proof structure at all.
 
-The repo's Python bench reports a smaller end-to-end figure at the same sizes
+The repo's Python bench reports a different end-to-end figure at the same sizes
 (`docs/development.md`). That is not a contradiction: it generates its trace on
-device and never leaves the device, so it pays neither `h2d` nor `assemble`.
-Both numbers are honest; this one is what a Rust caller actually sees.
+device and never leaves, so it pays neither `h2d` nor `assemble`. Both numbers
+are honest; this one is what a Rust caller actually sees.
 
 ## The wire
 
