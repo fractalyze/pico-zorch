@@ -342,7 +342,7 @@ fn main() {
         "{root}/pico_zorch/uni_stark/testdata/golden/trace_commit.json"
     ));
     emit_batch_commit(&format!(
-        "{root}/pico_zorch/uni_stark/testdata/golden/batch_commit.json"
+        "{root}/pico_zorch/commit/testdata/golden/batch_commit.json"
     ));
     emit_fib_prove(&format!(
         "{root}/pico_zorch/uni_stark/testdata/golden/fib_prove.json"
