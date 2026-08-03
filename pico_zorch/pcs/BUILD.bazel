@@ -2,33 +2,32 @@ load("@rules_python//python:defs.bzl", "py_library", "py_test")
 load("@pico_zorch_pip//:requirements.bzl", "requirement")
 load("//:defs.bzl", "GPU_PLUGIN_DEPS")
 
-# The Merkle commitment scheme, one layer below the PCS: it binds a batch of
-# already-extended matrices to a root and knows nothing about domains or FRI.
-exports_files(["testdata/golden/batch_commit.json"])
-
+# The polynomial commitment scheme: domains, extension and committed order.
+# Binding the extended matrices to a root belongs to //pico_zorch/commit:mmcs.
 py_library(
-    name = "mmcs",
+    name = "two_adic_fri",
     srcs = [
         "__init__.py",
-        "mmcs.py",
+        "two_adic_fri.py",
     ],
     visibility = ["//visibility:public"],
     deps = [
         "//pico_zorch",
-        "@zorch//zorch/commit:merkle",
+        "//pico_zorch/commit:mmcs",
+        "@zorch//zorch/coding:reed_solomon",
         requirement("frx"),
+        requirement("zk_dtypes"),
     ],
 )
 
 py_test(
-    name = "mmcs_test",
-    srcs = ["mmcs_test.py"],
-    data = ["testdata/golden/batch_commit.json"],
+    name = "two_adic_fri_test",
+    srcs = ["two_adic_fri_test.py"],
+    data = ["//pico_zorch/commit:testdata/golden/batch_commit.json"],
     deps = [
-        ":mmcs",
+        ":two_adic_fri",
+        "//pico_zorch/commit:mmcs",
         "//pico_zorch/poseidon2:koalabear",
-        "//pico_zorch/uni_stark:fri",
-        "@zorch//zorch/coding:reed_solomon",
         requirement("absl_py"),
         requirement("frx"),
         requirement("numpy"),
