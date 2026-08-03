@@ -157,6 +157,12 @@ class FriProof:
     trace_openings: Opening
     quotient_openings: Opening
     commit_phase_openings: Sequence[Opening]
+    # The sampled query indices. Not wire data — a verifier re-derives them
+    # from the transcript, and the reference's proof does not carry them. They
+    # are here because the batched layout above is meaningless without them:
+    # picking the reference's sibling out of a pair row needs the index whose
+    # parity chose it. Prover-side, like `QuotientProof.data`.
+    query_indices: Array
 
 
 @dataclass(frozen=True)

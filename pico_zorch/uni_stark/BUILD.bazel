@@ -2,6 +2,10 @@ load("@rules_python//python:defs.bzl", "py_binary", "py_library", "py_test")
 load("@pico_zorch_pip//:requirements.bzl", "requirement")
 load("//:defs.bzl", "GPU_PLUGIN_DEPS")
 
+# The e2e golden is the byte-match contract; //export tests the same vector
+# against the traced-as-one-program path the Rust binding runs.
+exports_files(["testdata/golden/fib_prove.json"])
+
 py_library(
     name = "air",
     srcs = [

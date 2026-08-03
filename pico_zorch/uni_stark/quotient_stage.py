@@ -83,14 +83,23 @@ class QuotientProver(
         transcript: PicoTranscript,
     ) -> ProveResult[TraceOpeningClaim, QuotientProof, PicoTranscript]:
         log_n = claim.degree_bits
-        generator = fnp.array(GENERATOR, dtype=F)
-        trace_domain = Coset(log_n, fnp.ones((), F))
         log_qd = log_quotient_degree(claim.air.constraint_degree)
         quotient_degree = 1 << log_qd
 
+        # The domains are protocol constants — functions of the degree bits and
+        # the field generator, never of the trace. Forcing them to compile-time
+        # keeps them concrete when the whole prover is traced as one program,
+        # which the commit needs: a coset shift keys a jit zone, so a staged
+        # one could not be used at all.
+        with frx.ensure_compile_time_eval():
+            generator = fnp.array(GENERATOR, dtype=F)
+            trace_domain = Coset(log_n, fnp.ones((), F))
+            quotient_domain = Coset(log_n + log_qd, generator)
+            qc_domains = quotient_domain.split_domains(quotient_degree)
+            chunk_shifts = [generator / d.shift for d in qc_domains]
+
         t, alpha = transcript.sample_ext()
 
-        quotient_domain = Coset(log_n + log_qd, generator)
         q_flat = _quotient_flat(
             claim.air,
             log_n,
@@ -100,11 +109,7 @@ class QuotientProver(
             alpha,
         )
         chunks = quotient_domain.split_evals(quotient_degree, q_flat)
-        qc_domains = quotient_domain.split_domains(quotient_degree)
-        quotient_root, quotient_data = self.pcs.commit(
-            chunks,
-            shifts=[generator / d.shift for d in qc_domains],
-        )
+        quotient_root, quotient_data = self.pcs.commit(chunks, shifts=chunk_shifts)
 
         t = t.observe(quotient_root)
         t, zeta = t.sample_ext()

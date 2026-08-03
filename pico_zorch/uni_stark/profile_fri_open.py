@@ -93,12 +93,13 @@ def _one_pass(pcs, trace, trace_data, claim, quotient, t, n, n_cols):
         tt, pow_witness = tt.grind(params.proof_of_work_bits)
     tm.lap("grind(16)", pow_witness)
 
-    tt, indices = sample_query_indices(
+    tt, idx = sample_query_indices(
         tt, (n - 1).bit_length() + params.log_blowup, params.num_queries
     )
-    tm.lap("sample_indices", None)
+    # Block on the indices themselves: they now stay on device, so without
+    # this the sample would be attributed to the following open_batch.
+    tm.lap("sample_indices", idx)
 
-    idx = fnp.asarray(indices.astype(np.int32))
     with frx.profiler.TraceAnnotation("open_batch"):
         opens = [
             open_batch(pcs.tree, trace_data, idx),

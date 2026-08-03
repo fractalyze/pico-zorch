@@ -1,0 +1,44 @@
+[package]
+name = "pico-zorch"
+version = "0.1.0"
+edition = "2021"
+description = "Drop-in GPU replacement for p3_uni_stark::prove under Pico's KoalaBearPoseidon2 config: the whole proof — trace commit, quotient, FRI and transcript — as one fused xla executable, byte-identical to the reference."
+
+# Own workspace root. `../golden` stays a standalone package (the fixture
+# generator and reference bench are built from that directory directly), so it
+# is a plain path dependency rather than a member.
+[workspace]
+
+[dependencies]
+# The Pico stark config — KoalaBearPoseidon2 over the Plonky3 fork Pico
+# vendors. `golden/` owns the single definition so the fixture generator, the
+# reference bench and this binding cannot describe different provers; a third
+# consumer is exactly what that crate is for.
+pico-zorch-golden = { path = "../golden" }
+
+# The same rev golden pins: brevis-network/Plonky3@7fbe1908, the fork Pico
+# v2.0.0 vendors. Cargo unifies these with golden's copies.
+p3-challenger = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }
+p3-commit = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }
+p3-field = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }
+p3-fri = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }
+p3-koala-bear = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }
+p3-matrix = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }
+p3-merkle-tree = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }
+p3-symmetric = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }
+p3-uni-stark = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }
+
+# Pinned: xla-pjrt is a fast-moving shared repo, so pin the rev rather than
+# tracking main (else `cargo update` can drift onto a breaking change).
+xla-pjrt = { git = "https://github.com/fractalyze/xla-pjrt", rev = "e955dc16a78af2889e262029400eba7f6a29bb6f" }
+
+serde = { version = "1", features = ["derive"] }
+# Manifest parsing only. The proof reassembly deliberately does NOT use JSON —
+# see `proof::assemble`.
+serde_json = "1"
+# The reassembly hop. Binary and non-self-describing, which is exactly why it
+# is fast: no field names are written or matched.
+bincode = "1"
+
+[dev-dependencies]
+p3-air = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe1908820f4d843370096ec517fd7429c9930d" }
