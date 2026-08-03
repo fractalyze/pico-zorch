@@ -31,6 +31,7 @@ under Pico's RISCV-phase FRI config (log_blowup 1, 84 queries, 16 PoW bits).
 | Pico transcript | [`pico_zorch/challenger/`](pico_zorch/challenger/) | observe/sample/sample_bits/grind script |
 | TwoAdicFriPcs (commit, open, verify) | [`pico_zorch/uni_stark/fri.py`](pico_zorch/uni_stark/fri.py) | trace LDE + Merkle root |
 | Quotient, FRI open, prover/verifier stages | [`pico_zorch/uni_stark/`](pico_zorch/uni_stark/) | the complete `p3_uni_stark::prove` proof |
+| Rust drop-in for `p3_uni_stark::prove` | [`rust/`](rust/) | the reference proof, field for field |
 
 The pipeline is a zorch claim-reduction chain:
 
@@ -47,6 +48,28 @@ claims. Not yet covered: Pico's machine-level prover
 (the multi-chip outer transcript with permutation traces — `p3_uni_stark`
 validates every layer beneath it), bincode wire serialization, and
 GPU-scale shards.
+
+## Swapping this prover into Pico
+
+[`rust/`](rust/) is a Rust crate that replaces `p3_uni_stark::prove` one call
+for one, so a Pico build gets these kernels without changing anything else:
+
+```rust
+let proof = pico_zorch::prove(&trace, &pis)?;   // p3_uni_stark::verify accepts it
+```
+
+The whole proof runs as a single exported xla executable — a STARK cannot use
+`bellman-zorch`'s "cheap head, fused kernel, cheap tail" split, because
+Fiat-Shamir interleaves the transcript with every heavy stage, but this
+prover's sponge already runs on device, so all of it lowers to one program.
+Export a core per instance shape, then prove:
+
+```sh
+FRX_PLATFORMS=cuda bazel run //export:export_pico_core -- --degree_bits=20 --width=32
+```
+
+See [`rust/README.md`](rust/README.md) for setup, the wire representation, and
+the byte-match test.
 
 ## Regenerating the golden vectors
 

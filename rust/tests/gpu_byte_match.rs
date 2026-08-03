@@ -80,8 +80,11 @@ fn rejects_a_trace_the_core_was_not_exported_for() {
     let (trace, _) = fib_trace(WIDTH, 1 << (DEGREE_BITS + 1));
     let public_values = vec![Val::ZERO, Val::ONE, Val::ZERO];
 
-    let err = pico_zorch::prove_at(Path::new(&core_path()), &trace, &public_values)
-        .expect_err("a mismatched trace height must be rejected");
+    // `Proof` has no `Debug`, so unwrap the error by hand.
+    let err = match pico_zorch::prove_at(Path::new(&core_path()), &trace, &public_values) {
+        Ok(_) => panic!("a mismatched trace height must be rejected"),
+        Err(e) => e,
+    };
     assert!(
         err.contains("re-export"),
         "error should tell the caller how to fix it, got: {err}"
