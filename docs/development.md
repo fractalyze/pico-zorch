@@ -56,6 +56,37 @@ has the env setup. Two things bite:
 same golden vector `fib_e2e_test` pins the eager composite against — the two
 fail together if the export drifts from the prover.
 
+### Benchmarking it
+
+`rust/examples/bench.rs` times `pico_zorch::prove` and asserts byte-identity
+against `p3_uni_stark::prove` at that size first — benchmarking at a real size
+is also how the byte-match gets exercised beyond the golden's 2^3 instance.
+The comparison number comes from `reference-bench --features parallel`, never
+from the serial reference the bench links (see below).
+
+```sh
+cargo run --release --example bench -- 20 32 5
+```
+
+Measured on the same host as the table above (RTX 5090, `--n_cols=32`):
+
+| Prover | 2^16 rows | 2^20 rows |
+|---|---|---|
+| Reference CPU (parallel) | 74.6 ms | 1,047.9 ms |
+| pico-zorch Rust binding | 5.6 ms | 23.4 ms |
+| Speedup | 13.3x | 44.8x |
+
+These CPU figures are lower than the 89 ms / 1,220 ms in the table above
+because they were re-measured later on a less contended box; compare within a
+row, not across the two tables.
+
+The Rust figure is above the Python `[e2e]` at the same size, and the gap is
+real work rather than overhead in the binding: a Rust caller pays to upload its
+trace (8.2 ms for 134 MB at 2^20) and to materialize a `p3_uni_stark::Proof`
+(1.9 ms), neither of which the Python bench does — it generates on device and
+never leaves. Quote the Rust number for "what a Pico integrator would see" and
+the Python one for "what the kernels do".
+
 If `/tmp` is a small tmpfs (it is on the workstation), point Bazel's temp at a
 real disk or pip's wheel downloads fail with `No space left on device`:
 
