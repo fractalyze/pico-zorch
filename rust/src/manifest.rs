@@ -28,17 +28,40 @@ impl Spec {
     }
 }
 
+/// A core's buffers, plus whatever its kind adds.
+///
+/// Every core describes its inputs and outputs the same way; only some of them
+/// prove. The uni-stark core carries the proof's shape too — AIR, degree bits,
+/// query count — while a PCS commit core has no notion of any of it, so those
+/// fields are optional here and reached through [`Manifest::uni_stark`], which
+/// fails loudly rather than defaulting.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Manifest {
-    pub air: String,
-    pub degree_bits: usize,
-    pub width: usize,
-    pub log_blowup: usize,
-    pub num_queries: usize,
-    pub proof_of_work_bits: usize,
-    pub quotient_degree: usize,
     pub inputs: Vec<Spec>,
     pub outputs: Vec<Spec>,
+    #[serde(default)]
+    pub air: Option<String>,
+    #[serde(default)]
+    pub degree_bits: Option<usize>,
+    #[serde(default)]
+    pub width: Option<usize>,
+    #[serde(default)]
+    pub log_blowup: Option<usize>,
+    #[serde(default)]
+    pub num_queries: Option<usize>,
+    #[serde(default)]
+    pub proof_of_work_bits: Option<usize>,
+    #[serde(default)]
+    pub quotient_degree: Option<usize>,
+}
+
+/// The proof-shaped parameters only a uni-stark core carries.
+#[derive(Debug, Clone)]
+pub struct UniStark {
+    pub degree_bits: usize,
+    pub width: usize,
+    pub num_queries: usize,
+    pub quotient_degree: usize,
 }
 
 impl Manifest {
@@ -82,26 +105,43 @@ impl Manifest {
             .ok_or_else(|| "commit_phase_roots must be [layers, 8]".to_string())
     }
 
+    /// The uni-stark parameters, or an error naming what is missing.
+    pub fn uni_stark(&self) -> Result<UniStark, String> {
+        let missing = |f: &str| format!("core manifest has no {f:?} — not a uni-stark core");
+        Ok(UniStark {
+            degree_bits: self.degree_bits.ok_or_else(|| missing("degree_bits"))?,
+            width: self.width.ok_or_else(|| missing("width"))?,
+            num_queries: self.num_queries.ok_or_else(|| missing("num_queries"))?,
+            quotient_degree: self.quotient_degree.ok_or_else(|| missing("quotient_degree"))?,
+        })
+    }
+
     /// Fail before any PJRT call if the core was exported for a different
     /// instance — otherwise a mismatch surfaces as an opaque plugin abort or,
     /// worse, a silently wrong proof.
     pub fn expect_instance(&self, degree_bits: usize, width: usize) -> Result<(), String> {
-        if self.degree_bits != degree_bits || self.width != width {
+        let us = self.uni_stark()?;
+        if us.degree_bits != degree_bits || us.width != width {
             return Err(format!(
                 "core was exported for degree_bits={} width={} but this instance is \
                  degree_bits={degree_bits} width={width} — re-export: \
                  bazel run //export:export_uni_stark_core -- --degree_bits={degree_bits} \
                  --width={width}",
-                self.degree_bits, self.width
+                us.degree_bits, us.width
             ));
         }
         Ok(())
     }
 
     fn validate(&self) -> Result<(), String> {
+        if self.air.is_none() {
+            // Not a uni-stark core; its arity and outputs are its own business
+            // (a PCS commit core takes one matrix per chip).
+            return Ok(());
+        }
         if self.inputs.len() != 2 {
             return Err(format!(
-                "core must take (trace, public_values), got {} inputs",
+                "a uni-stark core takes (trace, public_values), got {} inputs",
                 self.inputs.len()
             ));
         }

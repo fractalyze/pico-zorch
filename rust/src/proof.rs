@@ -140,9 +140,10 @@ fn path_depth(spec_dims: &[usize], queries: usize, name: &str) -> Result<usize, 
 /// Rebuild the reference proof from one core execution.
 pub fn assemble(manifest: &Manifest, raw: &[Vec<u8>]) -> Result<p3_uni_stark::Proof<MyConfig>, String> {
     let out = Outputs::new(manifest, raw)?;
-    let queries = manifest.num_queries;
+    let us = manifest.uni_stark()?;
+    let queries = us.num_queries;
     let layers = manifest.num_fri_layers()?;
-    let width = manifest.width;
+    let width = us.width;
 
     let trace_commit: Commitment = Hash::from(digest(&out.vals("trace_root")?)?);
     let quotient_commit: Commitment = Hash::from(digest(&out.vals("quotient_root")?)?);
@@ -151,7 +152,7 @@ pub fn assemble(manifest: &Manifest, raw: &[Vec<u8>]) -> Result<p3_uni_stark::Pr
     let trace_next = wire::challenges(&out.vals("trace_next")?)?;
     let quotient_chunks = wire::rows(
         &wire::challenges(&out.vals("quotient_chunks")?)?,
-        manifest.quotient_degree,
+        us.quotient_degree,
     )?;
 
     let commit_phase_commits: Vec<Commitment> =
@@ -257,7 +258,7 @@ pub fn assemble(manifest: &Manifest, raw: &[Vec<u8>]) -> Result<p3_uni_stark::Pr
             final_poly,
             pow_witness,
         },
-        degree_bits: manifest.degree_bits,
+        degree_bits: us.degree_bits,
     };
 
     // Both ends of this hop use identical leaf types, so it re-wraps the

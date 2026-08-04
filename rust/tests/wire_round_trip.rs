@@ -238,13 +238,15 @@ fn encode(mirror: &Mirror, indices: &[usize], quotient_degree: usize) -> (Manife
     }
 
     let manifest = Manifest {
-        air: "fib".into(),
-        degree_bits: DEGREE_BITS,
-        width: WIDTH,
-        log_blowup: pico_zorch_golden::LOG_BLOWUP,
-        num_queries: queries,
-        proof_of_work_bits: pico_zorch_golden::POW_BITS,
-        quotient_degree,
+        // A uni-stark core, so every proof-shaped field is present; a PCS
+        // commit core leaves them out entirely.
+        air: Some("fib".into()),
+        degree_bits: Some(DEGREE_BITS),
+        width: Some(WIDTH),
+        log_blowup: Some(pico_zorch_golden::LOG_BLOWUP),
+        num_queries: Some(queries),
+        proof_of_work_bits: Some(pico_zorch_golden::POW_BITS),
+        quotient_degree: Some(quotient_degree),
         inputs: vec![
             Spec {
                 name: "trace".into(),

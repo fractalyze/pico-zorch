@@ -42,3 +42,18 @@ py_test(
     ] + GPU_PLUGIN_DEPS,
 )
 
+
+# The batched PCS commit behind Pico's `commit_main`.
+py_binary(
+    name = "export_pcs_commit_core",
+    srcs = ["export_pcs_commit_core.py"],
+    visibility = ["//visibility:public"],
+    deps = [
+        "//pico_zorch/commit:mmcs",
+        "//pico_zorch/pcs:two_adic_fri",
+        "//pico_zorch/poseidon2:koalabear",
+        requirement("frx"),
+        requirement("numpy"),
+        requirement("zk_dtypes"),
+    ] + GPU_PLUGIN_DEPS,
+)

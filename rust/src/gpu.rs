@@ -79,6 +79,57 @@ pub fn load(path: &Path) -> Result<&'static Core, String> {
     Ok(core)
 }
 
+/// Run `core` over an arbitrary list of field-array inputs, in manifest order.
+///
+/// The generic sibling of [`run`]: a PCS commit takes one matrix per chip, so
+/// its arity is a property of the exported core rather than of the protocol.
+pub fn run_many(core: &Core, inputs: &[&[Val]]) -> Result<(Vec<Vec<u8>>, Phases), String> {
+    let m = &core.manifest;
+    if inputs.len() != m.inputs.len() {
+        return Err(format!(
+            "core takes {} inputs but {} were given",
+            m.inputs.len(),
+            inputs.len()
+        ));
+    }
+    for (i, (given, spec)) in inputs.iter().zip(&m.inputs).enumerate() {
+        if given.len() != spec.len() {
+            return Err(format!(
+                "input {i} ({}) has {} elements but the core expects {} ({:?})",
+                spec.name,
+                given.len(),
+                spec.len(),
+                spec.dims
+            ));
+        }
+    }
+
+    let s = gpu();
+    let t = Instant::now();
+    let buffers: Vec<xla_pjrt::Buffer> = inputs
+        .iter()
+        .zip(&m.inputs)
+        .map(|(values, spec)| {
+            let dims: Vec<i64> = spec.dims.iter().map(|&n| n as i64).collect();
+            unsafe { s.session.input_buffer(wire::as_bytes(values), &dims, KOALABEAR_MONT) }
+        })
+        .collect();
+    let h2d = t.elapsed();
+
+    let refs: Vec<&xla_pjrt::Buffer> = buffers.iter().collect();
+    let (outs, dispatch, readback) =
+        unsafe { s.session.run_buffers_timed(&core.exe, &refs, m.outputs.len()) };
+    Ok((
+        outs,
+        Phases {
+            h2d,
+            dispatch,
+            readback,
+            assemble: Duration::default(),
+        },
+    ))
+}
+
 /// Run `core` on one instance, returning its raw output buffers in manifest
 /// order.
 pub fn run(

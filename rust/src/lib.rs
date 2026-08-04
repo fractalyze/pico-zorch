@@ -1,7 +1,7 @@
 //! A GPU Pico uni-stark prover: a drop-in for `p3_uni_stark::prove` under
 //! Pico's `KoalaBearPoseidon2` config, byte-identical to the reference.
 //!
-//! ```ignore
+//! ```text
 //! // before
 //! let proof = p3_uni_stark::prove(&cfg, &air, &mut challenger, trace, &pis);
 //! // after
@@ -38,6 +38,7 @@
 
 pub mod gpu;
 pub mod manifest;
+pub mod pcs;
 pub mod proof;
 pub mod prove;
 pub mod wire;
