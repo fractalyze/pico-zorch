@@ -19,12 +19,17 @@
 use std::fs;
 use std::path::Path;
 
-use p3_field::{FieldAlgebra, PrimeField32};
+use p3_field::{FieldAlgebra, FieldExtensionAlgebra, PrimeField32};
 use serde_json::{json, Value};
 
+use p3_air::VirtualPairCol;
+use p3_matrix::dense::RowMajorMatrix;
+use p3_matrix::Matrix;
+use pico_vm::machine::lookup::{LookupScope, LookupType, VirtualPairLookup};
+use pico_vm::machine::permutation::generate_permutation_trace;
 use pico_vm::machine::septic::{SepticCurve, SepticDigest, SepticExtension};
 
-use pico_zorch_golden::Val;
+use pico_zorch_golden::{Challenge, Val};
 
 fn ser_ext(x: SepticExtension<Val>) -> Value {
     json!(x.0.iter().map(|c| c.as_canonical_u32()).collect::<Vec<_>>())
@@ -85,15 +90,140 @@ fn main() {
     assert!(doubled.check_on_point(), "2P must stay on the curve");
     assert!(sum.check_on_point(), "P + 2P must stay on the curve");
 
+    write_septic(&root, &products, &formulas, &start, &zero, &doubled, &sum);
+    write_permutation(&root);
+}
+
+/// A LogUp permutation trace, from Pico's own generator.
+///
+/// The interactions select main columns directly (`single_main`), which keeps
+/// the fixture about the LogUp arithmetic — the RLC denominator, the sign flip
+/// on receives, the batching into columns, the running sum — rather than about
+/// any one chip's expression language. A consumer that evaluates its
+/// interactions some other way still has to produce these numbers.
+fn write_permutation(root: &str) {
+    const HEIGHT: usize = 8;
+    const WIDTH: usize = 4;
+    const BATCH_SIZE: usize = 2;
+
+    let main = RowMajorMatrix::new(
+        (0..HEIGHT * WIDTH)
+            .map(|i| Val::from_canonical_u32(3 + i as u32 * 5))
+            .collect(),
+        WIDTH,
+    );
+
+    // Two sends and two receives, with differing value counts so the RLC's
+    // beta powers are exercised past the first, and differing kinds so the
+    // `kind` term cannot be confused with a value term.
+    let looking = vec![
+        VirtualPairLookup::new(
+            vec![VirtualPairCol::single_main(0), VirtualPairCol::single_main(1)],
+            VirtualPairCol::single_main(2),
+            LookupType::Memory,
+            LookupScope::Regional,
+        ),
+        VirtualPairLookup::new(
+            vec![VirtualPairCol::single_main(1)],
+            VirtualPairCol::single_main(3),
+            LookupType::Alu,
+            LookupScope::Regional,
+        ),
+    ];
+    let looked = vec![
+        VirtualPairLookup::new(
+            vec![VirtualPairCol::single_main(2), VirtualPairCol::single_main(3)],
+            VirtualPairCol::single_main(0),
+            LookupType::Byte,
+            LookupScope::Regional,
+        ),
+        VirtualPairLookup::new(
+            vec![VirtualPairCol::single_main(3)],
+            VirtualPairCol::single_main(1),
+            LookupType::Program,
+            LookupScope::Regional,
+        ),
+    ];
+
+    // alpha and beta, the two challenges the RLC uses.
+    let challenges = [
+        Challenge::from_base_slice(&[
+            Val::from_canonical_u32(7),
+            Val::from_canonical_u32(11),
+            Val::from_canonical_u32(13),
+            Val::from_canonical_u32(17),
+        ]),
+        Challenge::from_base_slice(&[
+            Val::from_canonical_u32(19),
+            Val::from_canonical_u32(23),
+            Val::from_canonical_u32(29),
+            Val::from_canonical_u32(31),
+        ]),
+    ];
+
+    let (perm, regional) = generate_permutation_trace::<Val, Challenge>(
+        &looking,
+        &looked,
+        None,
+        &main,
+        &challenges,
+        BATCH_SIZE,
+    );
+
+    let ser_ch = |c: Challenge| {
+        let coeffs: &[Val] = c.as_base_slice();
+        json!(coeffs.iter().map(|v| v.as_canonical_u32()).collect::<Vec<_>>())
+    };
+
+    let out = format!("{root}/pico_zorch/permutation/testdata/golden/logup.json");
+    let value = json!({
+        "batch_size": BATCH_SIZE,
+        "alpha": ser_ch(challenges[0]),
+        "beta": ser_ch(challenges[1]),
+        // Interactions, already reduced to "which main column" — the shape a
+        // consumer needs after it has evaluated its own expressions.
+        "sends": [
+            {"kind": LookupType::Memory as usize, "value_cols": [0, 1], "mult_col": 2},
+            {"kind": LookupType::Alu as usize, "value_cols": [1], "mult_col": 3},
+        ],
+        "receives": [
+            {"kind": LookupType::Byte as usize, "value_cols": [2, 3], "mult_col": 0},
+            {"kind": LookupType::Program as usize, "value_cols": [3], "mult_col": 1},
+        ],
+        "main": (0..main.height())
+            .map(|r| json!(main.row_slice(r).iter().map(|v| v.as_canonical_u32()).collect::<Vec<_>>()))
+            .collect::<Vec<_>>(),
+        "permutation": (0..perm.height())
+            .map(|r| perm.row_slice(r).iter().map(|c| ser_ch(*c)).collect::<Vec<_>>())
+            .collect::<Vec<_>>(),
+        "regional_cumulative_sum": ser_ch(regional),
+    });
+
+    let path = Path::new(&out);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, format!("{:#}\n", value)).unwrap();
+    println!("wrote {out}");
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_septic(
+    root: &str,
+    products: &[Value],
+    formulas: &[Value],
+    start: &SepticCurve<Val>,
+    zero: &SepticCurve<Val>,
+    doubled: &SepticCurve<Val>,
+    sum: &SepticCurve<Val>,
+) {
     let out = format!("{root}/pico_zorch/septic/testdata/golden/septic.json");
     let value = json!({
         "modulus_note": "z^7 = 2 - 2*z^6  (EXT_COEFFS = [2,0,0,0,0,0,p-2])",
         "products": products,
         "curve_formulas": formulas,
-        "starting_digest": ser_point(&start),
-        "zero_digest": ser_point(&zero),
-        "double_starting": ser_point(&doubled),
-        "starting_plus_double": ser_point(&sum),
+        "starting_digest": ser_point(start),
+        "zero_digest": ser_point(zero),
+        "double_starting": ser_point(doubled),
+        "starting_plus_double": ser_point(sum),
         "negated_starting": ser_point(&start.neg()),
     });
 
