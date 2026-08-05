@@ -244,6 +244,142 @@ fn emit_batch_commit(out: &str) {
     );
 }
 
+
+/// A **multi-round** PCS opening — the shape `machine::prove` uses, where
+/// preprocessed, main, permutation and quotient commitments are opened
+/// together in one batched argument.
+///
+/// The uni-stark fixture pins a two-round open at fixed widths with every
+/// matrix the same height. This one varies what that one holds constant:
+/// matrices of differing heights inside a round, differing point counts per
+/// matrix, and more than one round. Those are exactly the axes the alpha
+/// offset (`num_reduced` is indexed *per log-height*, not globally) and the
+/// truncating `inv_denoms` are sensitive to, and both fail as a wrong proof
+/// rather than an error.
+fn emit_pcs_open(out: &str) {
+    // Two rounds; heights differ within a round so the per-log-height
+    // accumulators hold more than one matrix.
+    const ROUNDS: [&[(usize, usize)]; 2] = [&[(16, 2), (8, 1)], &[(16, 4), (4, 3)]];
+
+    let p = pcs();
+    let mut commits = Vec::new();
+    let mut datas = Vec::new();
+    let mut round_shapes = Vec::new();
+
+    for (r, shapes) in ROUNDS.iter().enumerate() {
+        let domains_and_mats = shapes
+            .iter()
+            .enumerate()
+            .map(|(m, &(height, width))| {
+                let values = (0..height * width)
+                    .map(|i| Val::from_canonical_usize(1 + i + 100 * (m + 10 * r)))
+                    .collect();
+                let mat = RowMajorMatrix::new(values, width);
+                let domain = <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(
+                    &p,
+                    mat.height(),
+                );
+                (domain, mat)
+            })
+            .collect::<Vec<_>>();
+        round_shapes.push(
+            domains_and_mats
+                .iter()
+                .map(|(_, m)| json!({"height": m.height(), "width": m.width()}))
+                .collect::<Vec<_>>(),
+        );
+        let (commit, data) =
+            <MyPcs as Pcs<Challenge, Challenger>>::commit(&p, domains_and_mats.clone());
+        commits.push(commit);
+        datas.push(data);
+    }
+
+    // The matrices again, for a consumer that has to reproduce the commit.
+    let matrices = ROUNDS
+        .iter()
+        .enumerate()
+        .map(|(r, shapes)| {
+            shapes
+                .iter()
+                .enumerate()
+                .map(|(m, &(height, width))| {
+                    let values: Vec<Val> = (0..height * width)
+                        .map(|i| Val::from_canonical_usize(1 + i + 100 * (m + 10 * r)))
+                        .collect();
+                    json!({
+                        "height": height,
+                        "width": width,
+                        "values": values.chunks(width).map(ser_fs).collect::<Vec<_>>(),
+                    })
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+
+    // Opening points. The first matrix of each round gets two points, so the
+    // per-matrix point count is not uniform.
+    let zeta = Challenge::from_canonical_u32(97);
+    let zeta_next = Challenge::from_canonical_u32(1234567);
+    let points_for = |shapes: &[(usize, usize)]| -> Vec<Vec<Challenge>> {
+        shapes
+            .iter()
+            .enumerate()
+            .map(|(i, _)| {
+                if i == 0 {
+                    vec![zeta, zeta_next]
+                } else {
+                    vec![zeta]
+                }
+            })
+            .collect()
+    };
+    let all_points: Vec<Vec<Vec<Challenge>>> = ROUNDS.iter().map(|s| points_for(s)).collect();
+
+    // The challenger is fresh, so a consumer derives alpha and every FRI
+    // challenge itself rather than being handed them.
+    let mut challenger = Challenger::new(pico_perm());
+    let rounds = datas
+        .iter()
+        .zip(all_points.iter())
+        .map(|(data, points)| (data, points.clone()))
+        .collect::<Vec<_>>();
+    let (opened, proof) =
+        <MyPcs as Pcs<Challenge, Challenger>>::open(&p, rounds, &mut challenger);
+
+    let ser_points = |pts: &Vec<Vec<Challenge>>| {
+        pts.iter()
+            .map(|per_mat| per_mat.iter().map(|z| ser_ext(*z)).collect::<Vec<_>>())
+            .collect::<Vec<_>>()
+    };
+
+    write_json(
+        out,
+        &json!({
+            "log_blowup": LOG_BLOWUP,
+            "rounds": (0..ROUNDS.len())
+                .map(|r| json!({
+                    "shapes": round_shapes[r],
+                    "matrices": matrices[r],
+                    "points": ser_points(&all_points[r]),
+                    "commit": ser_fs(&<[Val; 8]>::from(commits[r])),
+                }))
+                .collect::<Vec<_>>(),
+            // Barycentric evaluations, the public half of `open`'s return.
+            "opened_values": opened
+                .iter()
+                .map(|round| round
+                    .iter()
+                    .map(|mat| mat
+                        .iter()
+                        .map(|per_point| per_point.iter().map(|v| ser_ext(*v)).collect::<Vec<_>>())
+                        .collect::<Vec<_>>())
+                    .collect::<Vec<_>>())
+                .collect::<Vec<_>>(),
+            "proof": serde_json::to_value(&proof).unwrap(),
+        }),
+    );
+}
+
 /// The full uni-stark proof for the reference Fibonacci AIR, plus the
 /// challenges a verifier derives up to the PCS opening — enough to byte-match
 /// each pipeline stage before the proof as a whole.
@@ -343,6 +479,9 @@ fn main() {
     ));
     emit_batch_commit(&format!(
         "{root}/pico_zorch/commit/testdata/golden/batch_commit.json"
+    ));
+    emit_pcs_open(&format!(
+        "{root}/pico_zorch/pcs/testdata/golden/pcs_open.json"
     ));
     emit_fib_prove(&format!(
         "{root}/pico_zorch/uni_stark/testdata/golden/fib_prove.json"
