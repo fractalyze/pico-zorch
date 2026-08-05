@@ -217,17 +217,22 @@ impl Pcs<Challenge, Challenger> for TwoAdicFriPcs {
         challenger: &mut Challenger,
     ) -> (p3_commit::OpenedValues<Challenge>, Self::Proof) {
         let _ = (rounds, challenger, self.open_core);
-        // Not yet wired. The core exists and byte-matches the reference
-        // (`//export:export_pcs_open_core`, pinned by
-        // `//pico_zorch/pcs:open_test`); what is missing is host-side:
+        // Not wired yet, and the remaining work is host-side plumbing rather
+        // than protocol:
         //
-        //  - bridging `Challenger` to the core's sponge state and back.
-        //    Plonky3 exposes `sponge_state` / `input_buffer` / `output_buffer`
-        //    publicly, so it is reachable, but its output buffer is consumed
-        //    from the back while the core's indexes a prefix — a mismatch
-        //    here yields a wrong proof rather than an error.
-        //  - reassembling `FriProof` from the core's outputs: 84 query proofs,
-        //    each carrying per-round input openings and commit-phase steps.
+        //  - decode the core's 29 outputs into `OpenedValues` and `FriProof`.
+        //    Every field of both is `pub`, so this is direct construction, not
+        //    another serde hop. The shape is fixed by the manifest: opened
+        //    values flatten round -> matrix -> point, the query openings carry
+        //    a leading query axis, and the fold-layer paths are ragged because
+        //    each layer's tree is shorter than the last.
+        //  - hand the extensions in as arguments, resolving each round's
+        //    device handle and re-uploading the ones that no longer resolve.
+        //
+        // Everything under it is done and verified: the core byte-matches the
+        // reference (`//pico_zorch/pcs:open_test`), the challenger crosses the
+        // boundary intact (`transcript::tests`), and `gpu::run_mixed` takes
+        // the mix of resident and fresh inputs this needs.
         //
         // Until then a caller wanting a full proof should use the reference
         // PCS; this type still moves the commit to the device.
