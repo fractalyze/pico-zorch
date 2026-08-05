@@ -285,3 +285,48 @@ def commit_phase_openings(tree, layers, index: Array, log_blowup: int):
         # per level, and every consumer wants them together.
         steps.append((sibling, fnp.stack(opened.path)))
     return steps
+
+
+def query_openings(mmcs, tree, rounds, layers, indices, log_blowup: int):
+    """Every query's openings, stacked rather than per query.
+
+    A query proof is naturally a list of small pieces — a row here, a sibling
+    there — but emitting them individually costs one device buffer per piece,
+    and the count grows with `num_queries` times the round and layer counts.
+    Stacking over the query axis keeps the output count a property of the
+    *shape* of the argument rather than of how many queries it runs.
+
+    Returns `(input_rows, input_paths, layer_siblings, layer_paths)`:
+
+      input_rows[r][m]  `[queries, width]`      each round's matrix rows
+      input_paths[r]    `[queries, depth, 8]`   one path per round
+      layer_siblings    `[queries, layers]`     the fold chain's siblings
+      layer_paths       one `[queries, depth_i, 8]` per layer
+
+    The layer paths stay a list because each fold halves the codeword, so layer
+    `i`'s tree is shorter than layer `i-1`'s and their paths are not the same
+    length. Stacking them would mean padding, and a padded authentication path
+    is a shape the verifier does not have.
+    """
+    log_global = max(
+        o.lde.shape[0] for round_ in rounds for o in round_
+    ).bit_length() - 1
+
+    input_rows, input_paths = [], []
+    for round_ in rounds:
+        mats = [o.lde for o in round_]
+        log_round = max(m.shape[0] for m in mats).bit_length() - 1
+        reduced = indices >> (log_global - log_round)
+        _, layer_stack = mmcs.commit(mats)
+
+        opened = frx.vmap(lambda i: mmcs.open_batch(i, mats, layer_stack))(reduced)
+        rows, path = opened
+        input_rows.append(rows)
+        input_paths.append(path)
+
+    steps = frx.vmap(
+        lambda i: commit_phase_openings(tree, layers, i, log_blowup)
+    )(indices)
+    layer_siblings = fnp.stack([sib for sib, _ in steps], axis=1)
+    layer_paths = [path for _, path in steps]
+    return input_rows, input_paths, layer_siblings, layer_paths

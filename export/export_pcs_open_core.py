@@ -39,10 +39,11 @@ from zk_dtypes import koalabear_mont as F
 from zk_dtypes import koalabearx4_mont as EF
 
 from pico_zorch.challenger.challenger import PicoTranscript
+from pico_zorch.commit.mmcs import MerkleTreeMmcs
 from pico_zorch.pcs.open import (
     MatrixOpening,
-    commit_phase_openings,
     commit_phase_over_rounds,
+    query_openings,
 )
 from pico_zorch.poseidon2.koalabear import koalabear16_merkle
 
@@ -73,7 +74,8 @@ def parse_rounds(text: str) -> list[list[tuple[int, int, int]]]:
 
 def core_fn(spec, log_blowup: int, num_queries: int, proof_of_work_bits: int):
     """The opening as one traceable function of state, extensions and points."""
-    _, _, tree = koalabear16_merkle()
+    _, compressor, tree = koalabear16_merkle()
+    mmcs = MerkleTreeMmcs(tree, compressor)
 
     def core(state, ldes, points):
         rounds = []
@@ -91,11 +93,21 @@ def core_fn(spec, log_blowup: int, num_queries: int, proof_of_work_bits: int):
                 tree, rounds, transcript, log_blowup, proof_of_work_bits, num_queries
             )
         )
-        steps = [
-            commit_phase_openings(tree, layers, indices[q], log_blowup)
-            for q in range(num_queries)
-        ]
-        return opened, roots, final_poly, witness, indices, steps, t.state
+        rows, paths, siblings, layer_paths = query_openings(
+            mmcs, tree, rounds, layers, indices, log_blowup
+        )
+        return (
+            opened,
+            roots,
+            final_poly,
+            witness,
+            indices,
+            rows,
+            paths,
+            siblings,
+            layer_paths,
+            t.state,
+        )
 
     return core
 

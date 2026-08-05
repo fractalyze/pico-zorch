@@ -80,7 +80,7 @@ class ExportedOpenCoreTest(absltest.TestCase):
         return frx.jit(fn)(PicoTranscript.new().state, ldes, points)
 
     def test_traced_core_matches_reference(self) -> None:
-        _, roots, final_poly, witness, _, _, _ = self._run()
+        _, roots, final_poly, witness, *_ = self._run()
 
         want_roots = self.golden["proof"]["commit_phase_commits"]
         self.assertEqual(len(roots), len(want_roots))
@@ -97,6 +97,23 @@ class ExportedOpenCoreTest(absltest.TestCase):
             int(np.asarray(lax.convert_element_type(witness, fnp.uint32))),
             self.golden["proof"]["pow_witness"],
         )
+
+    def test_query_openings_are_stacked_not_per_query(self) -> None:
+        """Emitting a buffer per query piece made the output count a function
+        of `num_queries`; stacking makes it a function of the argument's shape.
+        A regression here is a performance cliff, not a wrong answer, so it is
+        worth pinning."""
+        *_, rows, paths, siblings, layer_paths, _ = self._run()
+        queries = self.golden["proof"]["query_proofs"]
+        for per_round in rows:
+            for r in per_round:
+                self.assertEqual(r.shape[0], len(queries))
+        for p in paths:
+            self.assertEqual(p.shape[0], len(queries))
+        self.assertEqual(siblings.shape[0], len(queries))
+        # One array per fold layer: each layer's tree is shorter, so their
+        # paths are genuinely different lengths.
+        self.assertEqual(len(layer_paths), siblings.shape[1])
 
     def test_transcript_state_comes_back_out(self) -> None:
         """The machine prover keeps opening after the PCS returns, so the core
