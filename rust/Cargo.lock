@@ -499,6 +499,7 @@ dependencies = [
  "p3-air",
  "p3-challenger",
  "p3-commit",
+ "p3-dft",
  "p3-field",
  "p3-fri",
  "p3-koala-bear",
@@ -888,7 +889,7 @@ checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
 [[package]]
 name = "xla-pjrt"
 version = "0.1.0"
-source = "git+https://github.com/fractalyze/xla-pjrt?rev=608dba578aecf781ef82c135abcd6efebca73618#608dba578aecf781ef82c135abcd6efebca73618"
+source = "git+https://github.com/fractalyze/xla-pjrt?rev=1b63384689d54bd160eb44e87086119057c29d4a#1b63384689d54bd160eb44e87086119057c29d4a"
 dependencies = [
  "bindgen",
  "libloading",

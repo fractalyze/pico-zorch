@@ -1,10 +1,9 @@
-//! The GPU `Pcs::commit` is the reference's, commitment and prover data alike.
+//! The GPU `Pcs::commit` is the reference's, and what it hands on is too.
 //!
-//! Matching the root is necessary but not sufficient: the opening argument runs
-//! on the reference's untouched CPU path and reads its matrices and siblings out
-//! of our `ProverData`, so a tree that roots correctly but stores the wrong
-//! leaves would pass a root check and then fail — or worse, silently open — much
-//! later. This compares the whole prover data and then actually opens.
+//! Matching the root is necessary but not sufficient: the consumer's quotient
+//! stage reads extensions back out through `get_evaluations_on_domain`, so a
+//! commitment that roots correctly over the wrong extensions would pass a root
+//! check and fail much later. Both are checked here.
 //!
 //! Needs a GPU and a core exported for the same batch shape:
 //!
@@ -15,28 +14,34 @@
 
 use std::path::PathBuf;
 
-use p3_commit::Pcs;
-use p3_field::FieldAlgebra;
+use p3_commit::{Pcs, TwoAdicMultiplicativeCoset};
+use p3_field::{Field, FieldAlgebra};
 use p3_matrix::dense::RowMajorMatrix;
 use p3_matrix::Matrix;
 use pico_zorch::{pcs::TwoAdicFriPcs, Challenge, Challenger, Val};
-use pico_zorch_golden::{pcs, pico_perm, MyPcs};
+use pico_zorch_golden::{pcs, MyPcs};
 
 /// The shapes `//export:export_pcs_commit_core --shapes=4x3,16x2,8x1,16x4`
 /// produces — the same batch `golden`'s `emit_batch_commit` pins, deliberately
 /// unsorted so a consumer that forgets to sort by height fails.
 const SHAPES: [(usize, usize); 4] = [(4, 3), (16, 2), (8, 1), (16, 4)];
 
-fn core_path() -> PathBuf {
-    if let Ok(explicit) = std::env::var("PICO_ZORCH_PCS_CORE_MLIRBC") {
-        return PathBuf::from(explicit);
-    }
-    let stem: Vec<String> = SHAPES.iter().map(|(h, w)| format!("{h}x{w}")).collect();
+fn artifacts() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("crate has a parent directory")
         .join("artifacts")
-        .join(format!("pcs_commit_core_{}.mlirbc", stem.join("_")))
+}
+
+fn commit_core_path() -> PathBuf {
+    let stem: Vec<String> = SHAPES.iter().map(|(h, w)| format!("{h}x{w}")).collect();
+    artifacts().join(format!("pcs_commit_core_{}.mlirbc", stem.join("_")))
+}
+
+/// Only `commit` is exercised here, but the type takes both cores, so this
+/// points at whichever open core is around. `open` is not wired yet.
+fn open_core_path() -> PathBuf {
+    artifacts().join("pcs_open_core_16x2p2_8x1p1__16x4p2_4x3p1.mlirbc")
 }
 
 /// Position-dependent values, matching the golden emitter: a matrix landing in
@@ -71,7 +76,7 @@ fn domains_and_matrices(
 }
 
 fn gpu_pcs() -> TwoAdicFriPcs {
-    TwoAdicFriPcs::new(pcs(), &core_path()).unwrap_or_else(|e| {
+    TwoAdicFriPcs::new(pcs(), &commit_core_path(), &open_core_path()).unwrap_or_else(|e| {
         panic!(
             "{e}\n  export it: bazel run //export:export_pcs_commit_core -- --shapes={}",
             SHAPES
@@ -100,56 +105,33 @@ fn commitment_matches_the_reference() {
 
 #[test]
 #[ignore = "needs a GPU and an exported commit core (see the module docs)"]
-fn prover_data_matches_the_reference() {
-    // The opening path reads this, so an equal root over unequal prover data
-    // would surface as a failure far from its cause.
-    let reference = pcs();
-    let (_, want) =
-        <MyPcs as Pcs<Challenge, Challenger>>::commit(&reference, domains_and_matrices(&reference));
-    let (_, got) = Pcs::<Challenge, Challenger>::commit(&gpu_pcs(), domains_and_matrices(&reference));
-
-    assert_eq!(
-        serde_json::to_value(got).unwrap(),
-        serde_json::to_value(want).unwrap(),
-        "GPU prover data differs from the reference's"
-    );
-}
-
-#[test]
-#[ignore = "needs a GPU and an exported commit core (see the module docs)"]
-fn reference_opening_accepts_our_prover_data() {
-    // The end the swap exists for: commit on GPU, then let Pico's untouched
-    // opening argument run against it.
+fn evaluations_on_domain_match_the_reference() {
+    // What the consumer's quotient stage reads. It runs inside a rayon
+    // par_iter, so this path is CPU-side by construction — but it still has to
+    // produce the reference's extensions.
     let reference = pcs();
     let gpu = gpu_pcs();
-    let (commit, data) = Pcs::<Challenge, Challenger>::commit(&gpu, domains_and_matrices(&reference));
 
-    let zeta = Challenge::from_canonical_u32(97);
-    let points: Vec<Vec<Challenge>> = SHAPES.iter().map(|_| vec![zeta]).collect();
+    let (_, want_data) =
+        <MyPcs as Pcs<Challenge, Challenger>>::commit(&reference, domains_and_matrices(&reference));
+    let (_, got_data) =
+        Pcs::<Challenge, Challenger>::commit(&gpu, domains_and_matrices(&reference));
 
-    let mut prover_challenger = Challenger::new(pico_perm());
-    let (opened, proof) = Pcs::<Challenge, Challenger>::open(
-        &gpu,
-        vec![(&data, points.clone())],
-        &mut prover_challenger,
-    );
-
-    let rounds = SHAPES
-        .iter()
-        .zip(&opened[0])
-        .map(|(&(height, _), values)| {
-            let domain =
-                <MyPcs as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&reference, height);
-            (domain, vec![(zeta, values[0].clone())])
-        })
-        .collect();
-
-    let mut verifier_challenger = Challenger::new(pico_perm());
-    <MyPcs as Pcs<Challenge, Challenger>>::verify(
-        &reference,
-        vec![(commit, rounds)],
-        &proof,
-        &mut verifier_challenger,
-    )
-    .expect("the reference verifier must accept an opening of our commitment");
+    for (idx, &(height, _)) in SHAPES.iter().enumerate() {
+        // The reference only serves evaluations on the generator coset — the
+        // shift a quotient domain carries — so a natural domain would trip its
+        // own assertion.
+        let domain = TwoAdicMultiplicativeCoset {
+            log_n: height.trailing_zeros() as usize,
+            shift: Val::GENERATOR,
+        };
+        let want = <MyPcs as Pcs<Challenge, Challenger>>::get_evaluations_on_domain(
+            &reference, &want_data, idx, domain,
+        )
+        .to_row_major_matrix();
+        let got =
+            Pcs::<Challenge, Challenger>::get_evaluations_on_domain(&gpu, &got_data, idx, domain)
+                .to_row_major_matrix();
+        assert_eq!(got.values, want.values, "matrix {idx}");
+    }
 }

@@ -19,7 +19,25 @@ use crate::wire;
 struct Gpu {
     session: xla_pjrt::Session,
     cores: RefCell<HashMap<String, &'static Core>>,
+    /// Outputs a caller asked to keep on the device, by handle. Leaked to
+    /// `'static` like the cores: a PJRT buffer outlives any borrow of the
+    /// map, and the client it belongs to is never torn down anyway.
+    resident: RefCell<HashMap<u64, &'static Resident>>,
+    next_handle: RefCell<u64>,
 }
+
+/// One execution's outputs, still on the device.
+pub struct Resident {
+    pub buffers: Vec<xla_pjrt::Buffer>,
+}
+
+/// A handle to [`Resident`] buffers held by this thread's session.
+///
+/// Not the buffers themselves: the session is thread-local (a second PJRT
+/// client in one process aborts), so a caller that could hold buffers directly
+/// could move them to a thread that cannot use them. A handle fails to resolve
+/// there instead, and the caller falls back to re-uploading.
+pub type Handle = u64;
 
 thread_local! {
     /// One [`Gpu`] per thread, leaked to `'static` — a second PJRT client in
@@ -35,6 +53,8 @@ fn gpu() -> &'static Gpu {
             Box::leak(Box::new(Gpu {
                 session,
                 cores: RefCell::new(HashMap::new()),
+                resident: RefCell::new(HashMap::new()),
+                next_handle: RefCell::new(0),
             }))
         })
     })
@@ -77,6 +97,139 @@ pub fn load(path: &Path) -> Result<&'static Core, String> {
     let core: &'static Core = Box::leak(Box::new(Core { exe, manifest }));
     g.cores.borrow_mut().insert(key, core);
     Ok(core)
+}
+
+/// Run `core`, keeping its outputs on the device.
+///
+/// Returns `(handle, phases)`; resolve the handle with [`resident`] on the same
+/// thread. Use when the outputs are an intermediate the host never reads — a
+/// commit whose extensions only the opening consumes, for instance. The
+/// readback phase is zero by construction, so the dispatch time is the whole
+/// cost.
+pub fn run_many_to_device(
+    core: &Core,
+    inputs: &[&[Val]],
+) -> Result<(Handle, Phases), String> {
+    let s = gpu();
+    let (buffers, h2d) = upload(s, core, inputs)?;
+    let refs: Vec<&xla_pjrt::Buffer> = buffers.iter().collect();
+
+    let t = Instant::now();
+    let outs = unsafe {
+        s.session
+            .run_buffers_to_device(&core.exe, &refs, core.manifest.outputs.len())
+    };
+    let dispatch = t.elapsed();
+
+    // The inputs have been consumed by the execution; only the outputs are
+    // worth keeping.
+    buffers.into_iter().for_each(|b| unsafe { s.session.free_buffer(b) });
+
+    let handle = {
+        let mut next = s.next_handle.borrow_mut();
+        *next += 1;
+        *next
+    };
+    let kept: &'static Resident = Box::leak(Box::new(Resident { buffers: outs }));
+    s.resident.borrow_mut().insert(handle, kept);
+    Ok((
+        handle,
+        Phases {
+            h2d,
+            dispatch,
+            readback: Duration::default(),
+            assemble: Duration::default(),
+        },
+    ))
+}
+
+/// Copy one resident buffer to the host.
+///
+/// For the rare output a caller does need — a commitment, say — without
+/// dragging the rest of an execution's outputs back with it.
+pub fn to_host(buffer: &xla_pjrt::Buffer) -> Vec<u8> {
+    unsafe { gpu().session.buffer_to_host(buffer) }
+}
+
+/// The buffers behind `handle`, if this thread's session holds them.
+///
+/// `None` on a different thread than the one that produced them, or after the
+/// owning data round-tripped through serde. Callers treat that as "re-upload",
+/// not as an error.
+pub fn resident(handle: Handle) -> Option<&'static Resident> {
+    gpu().resident.borrow().get(&handle).copied()
+}
+
+/// Release a handle's device memory.
+pub fn release(handle: Handle) {
+    let s = gpu();
+    if let Some(kept) = s.resident.borrow_mut().remove(&handle) {
+        // SAFETY: `run_many_to_device` leaked this box and the map held the
+        // only pointer to it, which the `remove` above just took. Reclaiming
+        // it here frees the allocation as well as the buffers it owns.
+        let owned = unsafe { Box::from_raw(kept as *const Resident as *mut Resident) };
+        for buffer in owned.buffers {
+            unsafe { s.session.free_buffer(buffer) };
+        }
+    }
+}
+
+/// Run `core` against buffers already on the device, reading its outputs back.
+pub fn run_resident(
+    core: &Core,
+    inputs: &[&xla_pjrt::Buffer],
+) -> Result<(Vec<Vec<u8>>, Phases), String> {
+    let s = gpu();
+    let (outs, dispatch, readback) = unsafe {
+        s.session
+            .run_buffers_timed(&core.exe, inputs, core.manifest.outputs.len())
+    };
+    Ok((
+        outs,
+        Phases {
+            h2d: Duration::default(),
+            dispatch,
+            readback,
+            assemble: Duration::default(),
+        },
+    ))
+}
+
+/// Upload each input as a device buffer, checking it against the manifest.
+fn upload(
+    s: &'static Gpu,
+    core: &Core,
+    inputs: &[&[Val]],
+) -> Result<(Vec<xla_pjrt::Buffer>, Duration), String> {
+    let m = &core.manifest;
+    if inputs.len() != m.inputs.len() {
+        return Err(format!(
+            "core takes {} inputs but {} were given",
+            m.inputs.len(),
+            inputs.len()
+        ));
+    }
+    for (i, (given, spec)) in inputs.iter().zip(&m.inputs).enumerate() {
+        if given.len() != spec.len() {
+            return Err(format!(
+                "input {i} ({}) has {} elements but the core expects {} ({:?})",
+                spec.name,
+                given.len(),
+                spec.len(),
+                spec.dims
+            ));
+        }
+    }
+    let t = Instant::now();
+    let buffers = inputs
+        .iter()
+        .zip(&m.inputs)
+        .map(|(values, spec)| {
+            let dims: Vec<i64> = spec.dims.iter().map(|&n| n as i64).collect();
+            unsafe { s.session.input_buffer(wire::as_bytes(values), &dims, KOALABEAR_MONT) }
+        })
+        .collect();
+    Ok((buffers, t.elapsed()))
 }
 
 /// Run `core` over an arbitrary list of field-array inputs, in manifest order.

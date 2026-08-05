@@ -118,6 +118,14 @@ def main() -> None:
     points = [[np.zeros((), dtype=EF)] * n for _, _, n in flat]
     state = PicoTranscript.new().state
 
+    # Every core describes its buffers the same way, so a consumer can bind
+    # them without knowing which core it holds. The opening's outputs are a
+    # nested structure (per round, per matrix, per point, per query), so they
+    # are recorded in flatten order under positional names — the shapes are
+    # what a caller needs; the nesting it already knows from `rounds`.
+    out_avals, out_tree = frx.tree_util.tree_flatten(frx.eval_shape(fn, state, ldes, points))
+    in_avals, _ = frx.tree_util.tree_flatten((state, ldes, points))
+
     lowered = frx.jit(fn).lower(state, ldes, points)
     buf = io.BytesIO()
     lowered.compiler_ir(dialect="stablehlo").operation.write_bytecode(buf)
@@ -128,6 +136,9 @@ def main() -> None:
     )
     (ART / f"{stem}.mlirbc").write_bytes(buf.getvalue())
 
+    def spec_of(name, a):
+        return {"name": name, "dtype": str(a.dtype), "dims": list(a.shape)}
+
     manifest = {
         "log_blowup": args.log_blowup,
         "num_queries": args.num_queries,
@@ -136,6 +147,9 @@ def main() -> None:
             [{"height": h, "width": w, "points": n} for h, w, n in round_]
             for round_ in spec
         ],
+        "inputs": [spec_of(f"in{i}", a) for i, a in enumerate(in_avals)],
+        "outputs": [spec_of(f"out{i}", a) for i, a in enumerate(out_avals)],
+        "output_tree": str(out_tree),
     }
     (ART / f"{stem}.json").write_text(json.dumps(manifest, indent=2) + "\n")
     size = (ART / f"{stem}.mlirbc").stat().st_size

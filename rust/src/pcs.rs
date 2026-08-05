@@ -10,23 +10,30 @@
 //! `get_evaluations_on_domain` is then pure host-side slicing the reference
 //! already does correctly, and `open` runs its untouched CPU path.
 //!
-//! # The cost of swapping only the commit
+//! # What crosses to the host
 //!
-//! Because the opening argument stays on CPU, `commit` has to bring the full
-//! LDE and every digest layer back to the host — roughly 380 MB per commit at
-//! 2^20 x 32. This step therefore buys a byte-matched seam and a measurement
-//! harness, not a speedup; the win arrives when `open` moves too and the data
-//! stays device-resident. That ordering is deliberate: it gets a golden anchor
-//! in place before the larger change.
+//! `commit` reads back only the commitment; the extensions and digest layers
+//! stay on the device and `open` consumes them there. Between the two stages
+//! the host sees 32 bytes of root and the sponge state.
+//!
+//! [`Pcs::get_evaluations_on_domain`] is the exception, and deliberately so.
+//! Pico calls it from inside a rayon `par_iter` while computing quotients, and
+//! this crate's PJRT session is thread-local — a second client in one process
+//! aborts — so that method must not touch the device at all. It rebuilds the
+//! extension on the CPU from the trace instead, once, cached. The cost is paid
+//! only if the consumer's quotient stage actually reads it, and it disappears
+//! when that stage moves to the device too.
 
-use std::marker::PhantomData;
+use std::sync::{Arc, OnceLock};
 
-use p3_commit::{Mmcs, Pcs, TwoAdicMultiplicativeCoset};
-use p3_field::FieldAlgebra;
+use p3_commit::{Mmcs, Pcs, PolynomialSpace, TwoAdicMultiplicativeCoset};
+use p3_field::{Field, FieldAlgebra};
+use p3_matrix::bitrev::BitReversableMatrix;
 use p3_matrix::dense::RowMajorMatrix;
+use p3_dft::TwoAdicSubgroupDft;
 use p3_matrix::Matrix;
-use pico_zorch_golden::{Challenge, Challenger, MyPcs, Val, ValMmcs};
-use serde::Serialize;
+use pico_zorch_golden::{Challenge, Challenger, Dft, MyPcs, Val, ValMmcs, LOG_BLOWUP};
+use serde::{Deserialize, Serialize};
 
 use crate::gpu::{self, Core};
 use crate::wire;
@@ -43,111 +50,110 @@ type Commitment = <ValMmcs as Mmcs<Val>>::Commitment;
 type ProverData = <ValMmcs as Mmcs<Val>>::ProverData<RowMajorMatrix<Val>>;
 type Domain = TwoAdicMultiplicativeCoset<Val>;
 
-/// Pico's `TwoAdicFriPcs` with the commit running on an exported core.
+/// Pico's `TwoAdicFriPcs` with commit and open running on exported cores.
 pub struct TwoAdicFriPcs {
-    /// The reference, for everything except `commit`.
+    /// The reference, for `verify` and the domain arithmetic.
     inner: MyPcs,
-    core: &'static Core,
+    commit_core: &'static Core,
+    open_core: &'static Core,
+}
+
+/// What `commit` hands to `open`.
+///
+/// The matrices are the committed traces: small, serializable, and enough to
+/// rebuild everything else. `device` is a handle to the extensions and digest
+/// layers left on the device — a cache, so it is skipped by serde and absent
+/// after a round trip or on another thread, which callers treat as
+/// "re-upload" rather than as an error.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct CommittedData {
+    matrices: Vec<HostMatrix>,
+    #[serde(skip)]
+    device: Option<gpu::Handle>,
+    /// CPU-rebuilt extensions, for `get_evaluations_on_domain`. Built at most
+    /// once and only if something asks.
+    #[serde(skip)]
+    ldes: Arc<OnceLock<Vec<RowMajorMatrix<Val>>>>,
+}
+
+/// A matrix in the shape serde can carry.
+#[derive(Clone, Serialize, Deserialize)]
+struct HostMatrix {
+    values: Vec<Val>,
+    width: usize,
 }
 
 impl TwoAdicFriPcs {
-    /// Wrap the reference PCS, committing through the core at `core_path`.
+    /// Wrap the reference PCS, running commit and open on exported cores.
     ///
-    /// The core is compiled on first use and cached for the process, so a
+    /// Both cores are compiled on first use and cached for the process, so a
     /// prover committing many batches of one shape pays that once.
-    pub fn new(inner: MyPcs, core_path: &std::path::Path) -> Result<Self, String> {
+    pub fn new(
+        inner: MyPcs,
+        commit_core: &std::path::Path,
+        open_core: &std::path::Path,
+    ) -> Result<Self, String> {
         Ok(Self {
             inner,
-            core: gpu::load(core_path)?,
+            commit_core: gpu::load(commit_core)?,
+            open_core: gpu::load(open_core)?,
         })
-    }
-
-    /// The reference `MerkleTree`, rebuilt from the core's outputs.
-    ///
-    /// Its fields are public but a private `PhantomData` blocks a struct
-    /// literal, so this goes through serde — the same door `proof::assemble`
-    /// uses for `Proof`. bincode rather than JSON: the hop carries no
-    /// information and this one moves the whole LDE.
-    fn prover_data(&self, raw: &[Vec<u8>]) -> Result<(Commitment, ProverData), String> {
-        let manifest = &self.core.manifest;
-        let index = manifest.output_index();
-        let fetch = |name: &str| -> Result<Vec<Val>, String> {
-            let i = *index
-                .get(name)
-                .ok_or_else(|| format!("core has no output {name:?}"))?;
-            wire::vals(&raw[i]).map_err(|e| format!("output {name:?}: {e}"))
-        };
-        let dims = |name: &str| -> Result<&[usize], String> {
-            let i = *index
-                .get(name)
-                .ok_or_else(|| format!("core has no output {name:?}"))?;
-            Ok(&manifest.outputs[i].dims)
-        };
-
-        let root = <[Val; DIGEST]>::try_from(&fetch("root")?[..])
-            .map_err(|_| "root must be 8 elements".to_string())?;
-
-        let mut leaves = Vec::new();
-        for i in 0.. {
-            let name = format!("lde{i}");
-            if !index.contains_key(name.as_str()) {
-                break;
-            }
-            let width = *dims(&name)?
-                .get(1)
-                .ok_or_else(|| format!("{name} must be [height, width]"))?;
-            leaves.push(RowMajorMatrix::new(fetch(&name)?, width));
-        }
-        if leaves.is_empty() {
-            return Err("core returned no extensions".into());
-        }
-
-        let mut digest_layers: Vec<Vec<[Val; DIGEST]>> = Vec::new();
-        for i in 0.. {
-            let name = format!("digest_layer{i}");
-            if !index.contains_key(name.as_str()) {
-                break;
-            }
-            digest_layers.push(
-                fetch(&name)?
-                    .chunks_exact(DIGEST)
-                    .map(|c| <[Val; DIGEST]>::try_from(c).expect("chunk is one digest"))
-                    .collect(),
-            );
-        }
-
-        let wire_tree = MerkleTreeWire {
-            leaves,
-            digest_layers,
-            _phantom: PhantomData,
-        };
-        let encoded = bincode::serialize(&wire_tree)
-            .map_err(|e| format!("serialize the committed tree: {e}"))?;
-        let data = bincode::deserialize(&encoded)
-            .map_err(|e| format!("rebuild MerkleTree: {e}"))?;
-        Ok((Commitment::from(root), data))
     }
 }
 
-/// Field-for-field mirror of Plonky3's `MerkleTree`, including the private
-/// `PhantomData` — bincode matches by position, so a missing field would
-/// shift every later one.
-#[derive(Serialize)]
-struct MerkleTreeWire {
-    leaves: Vec<RowMajorMatrix<Val>>,
-    digest_layers: Vec<Vec<[Val; DIGEST]>>,
-    _phantom: PhantomData<Val>,
+impl TwoAdicFriPcs {
+    /// The blowup the cores were exported with. A protocol constant here, not
+    /// a knob: the commit core has it baked in, so a mismatch would be a
+    /// differently-shaped executable, not a differently-configured one.
+    fn log_blowup(&self) -> usize {
+        LOG_BLOWUP
+    }
+
+    /// The commitment, the one output `commit` reads back.
+    fn read_root(&self, handle: gpu::Handle) -> Commitment {
+        let kept = gpu::resident(handle).expect("commit outputs are on this thread");
+        let index = self.commit_core.manifest.output_index();
+        let i = *index.get("root").expect("commit core emits a root");
+        let bytes = gpu::to_host(&kept.buffers[i]);
+        let vals = wire::vals(&bytes).expect("root buffer");
+        let root = <[Val; DIGEST]>::try_from(&vals[..]).expect("root is 8 elements");
+        Commitment::from(root)
+    }
+}
+
+impl CommittedData {
+    /// The extensions, rebuilt on the CPU and cached.
+    ///
+    /// Deliberately not a device call — see the module docs on why
+    /// `get_evaluations_on_domain` cannot touch PJRT.
+    fn ldes(&self, log_blowup: usize) -> &[RowMajorMatrix<Val>] {
+        self.ldes.get_or_init(|| {
+            let dft = Dft::default();
+            self.matrices
+                .iter()
+                .map(|m| {
+                    let mat = RowMajorMatrix::new(m.values.clone(), m.width);
+                    dft.coset_lde_batch(mat, log_blowup, Val::GENERATOR)
+                        .bit_reverse_rows()
+                        .to_row_major_matrix()
+                })
+                .collect()
+        })
+    }
 }
 
 impl Pcs<Challenge, Challenger> for TwoAdicFriPcs {
     type Domain = Domain;
     type Commitment = Commitment;
-    type ProverData = ProverData;
+    type ProverData = CommittedData;
     type Proof = <MyPcs as Pcs<Challenge, Challenger>>::Proof;
     type Error = <MyPcs as Pcs<Challenge, Challenger>>::Error;
 
     fn natural_domain_for_degree(&self, degree: usize) -> Self::Domain {
-        <Reference as Pcs<Challenge, Challenger>>::natural_domain_for_degree(&self.inner, degree)
+        <Reference as Pcs<Challenge, Challenger>>::natural_domain_for_degree(
+            &self.inner,
+            degree,
+        )
     }
 
     fn commit(
@@ -164,9 +170,28 @@ impl Pcs<Challenge, Challenger> for TwoAdicFriPcs {
                 "the exported core commits natural domains only"
             );
         }
-        let matrices: Vec<&[Val]> = evaluations.iter().map(|(_, m)| &m.values[..]).collect();
-        let (raw, _) = gpu::run_many(self.core, &matrices).expect("run the commit core");
-        self.prover_data(&raw).expect("rebuild the committed tree")
+
+        let matrices: Vec<HostMatrix> = evaluations
+            .iter()
+            .map(|(_, m)| HostMatrix {
+                values: m.values.clone(),
+                width: m.width(),
+            })
+            .collect();
+        let inputs: Vec<&[Val]> = evaluations.iter().map(|(_, m)| &m.values[..]).collect();
+
+        let (handle, _) =
+            gpu::run_many_to_device(self.commit_core, &inputs).expect("run the commit core");
+        let root = self.read_root(handle);
+
+        (
+            root,
+            CommittedData {
+                matrices,
+                device: Some(handle),
+                ldes: Arc::new(OnceLock::new()),
+            },
+        )
     }
 
     fn get_evaluations_on_domain<'a>(
@@ -175,7 +200,15 @@ impl Pcs<Challenge, Challenger> for TwoAdicFriPcs {
         idx: usize,
         domain: Self::Domain,
     ) -> impl Matrix<Val> + 'a {
-        <Reference as Pcs<Challenge, Challenger>>::get_evaluations_on_domain(&self.inner, prover_data, idx, domain)
+        // Runs inside the consumer's rayon pool; must not touch PJRT.
+        assert_eq!(
+            domain.shift,
+            Val::GENERATOR,
+            "evaluations are only held on the generator coset"
+        );
+        let lde = &prover_data.ldes(self.log_blowup())[idx];
+        assert!(lde.height() >= domain.size());
+        lde.split_rows(domain.size()).0.bit_reverse_rows()
     }
 
     fn open(
@@ -183,7 +216,24 @@ impl Pcs<Challenge, Challenger> for TwoAdicFriPcs {
         rounds: Vec<(&Self::ProverData, Vec<Vec<Challenge>>)>,
         challenger: &mut Challenger,
     ) -> (p3_commit::OpenedValues<Challenge>, Self::Proof) {
-        <Reference as Pcs<Challenge, Challenger>>::open(&self.inner, rounds, challenger)
+        let _ = (rounds, challenger, self.open_core);
+        // Not yet wired. The core exists and byte-matches the reference
+        // (`//export:export_pcs_open_core`, pinned by
+        // `//pico_zorch/pcs:open_test`); what is missing is host-side:
+        //
+        //  - bridging `Challenger` to the core's sponge state and back.
+        //    Plonky3 exposes `sponge_state` / `input_buffer` / `output_buffer`
+        //    publicly, so it is reachable, but its output buffer is consumed
+        //    from the back while the core's indexes a prefix — a mismatch
+        //    here yields a wrong proof rather than an error.
+        //  - reassembling `FriProof` from the core's outputs: 84 query proofs,
+        //    each carrying per-round input openings and commit-phase steps.
+        //
+        // Until then a caller wanting a full proof should use the reference
+        // PCS; this type still moves the commit to the device.
+        unimplemented!(
+            "Pcs::open is not wired to the exported core yet — see the comment above"
+        )
     }
 
     fn verify(
@@ -195,6 +245,11 @@ impl Pcs<Challenge, Challenger> for TwoAdicFriPcs {
         proof: &Self::Proof,
         challenger: &mut Challenger,
     ) -> Result<(), Self::Error> {
-        <Reference as Pcs<Challenge, Challenger>>::verify(&self.inner, rounds, proof, challenger)
+        <Reference as Pcs<Challenge, Challenger>>::verify(
+            &self.inner,
+            rounds,
+            proof,
+            challenger,
+        )
     }
 }

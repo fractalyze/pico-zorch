@@ -27,6 +27,7 @@ p3-commit = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe
 p3-field = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe190" }
 p3-fri = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe190" }
 p3-koala-bear = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe190" }
+p3-dft = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe190" }
 p3-matrix = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe190" }
 p3-merkle-tree = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe190" }
 p3-symmetric = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7fbe190" }
@@ -34,7 +35,7 @@ p3-uni-stark = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7
 
 # Pinned: xla-pjrt is a fast-moving shared repo, so pin the rev rather than
 # tracking main (else `cargo update` can drift onto a breaking change).
-xla-pjrt = { git = "https://github.com/fractalyze/xla-pjrt", rev = "608dba578aecf781ef82c135abcd6efebca73618" }
+xla-pjrt = { git = "https://github.com/fractalyze/xla-pjrt", rev = "1b63384689d54bd160eb44e87086119057c29d4a" }
 
 serde = { version = "1", features = ["derive"] }
 # Manifest parsing only. The proof reassembly deliberately does NOT use JSON —
