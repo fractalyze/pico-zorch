@@ -143,6 +143,33 @@ class MerkleTreeMmcs:
 
         return layer[0], digest_layers
 
+    def open_batch(
+        self,
+        index: Array,
+        matrices: Sequence[Array],
+        digest_layers: Sequence[Array],
+    ) -> tuple[list[Array], Array]:
+        """One query's rows and sibling path.
+
+        `index` addresses the *tallest* matrix. A shorter one is read at
+        `index >> (log_max - log_height)`: the fold that brings a query down to
+        a shorter codeword is the same shift the commit used to place that
+        matrix, so the two stay in step.
+
+        The path itself is the ordinary sibling chain over the whole tree —
+        mixed heights change which row each matrix contributes, not the shape
+        of the authentication path.
+        """
+        log_max = max(m.shape[0] for m in matrices).bit_length() - 1
+        rows = [
+            m[index >> (log_max - (m.shape[0].bit_length() - 1))] for m in matrices
+        ]
+        # Sibling at each level: flip the bit the path descends on.
+        path = fnp.stack(
+            [digest_layers[i][(index >> i) ^ 1] for i in range(log_max)]
+        )
+        return rows, path
+
 
 def _join(matrices: Sequence[Array]) -> Array:
     """Concatenate same-height matrices along their columns.

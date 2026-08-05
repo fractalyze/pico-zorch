@@ -258,5 +258,81 @@ class CommitPhaseTest(absltest.TestCase):
             self.golden["proof"]["pow_witness"],
         )
 
+
+class InputOpeningTest(absltest.TestCase):
+    """Per-round query openings against the reference's own query proofs.
+
+    The query indices are not in the fixture: they come out of the transcript,
+    so reproducing the reference's openings at all means the transcript
+    matched through the grind as well.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        cls.golden = json.loads(_GOLDEN.read_text())
+        cls.log_blowup = cls.golden["log_blowup"]
+        _, compressor, tree = koalabear16_merkle()
+        cls.tree = tree
+        cls.mmcs = MerkleTreeMmcs(tree, compressor)
+        cls.pcs = TwoAdicFriPcs(cls.mmcs, log_blowup=cls.log_blowup)
+
+    def _rounds(self):
+        out = []
+        for rnd in self.golden["rounds"]:
+            openings = []
+            for mat, pts in zip(rnd["matrices"], rnd["points"]):
+                trace = fnp.array(mat["values"], dtype=F)
+                openings.append(
+                    Opening(
+                        lde=self.pcs.lde(trace),
+                        trace=trace,
+                        points=[_ext(z) for z in pts],
+                    )
+                )
+            out.append(openings)
+        return out
+
+    def test_input_openings_match_reference(self) -> None:
+        rounds = self._rounds()
+        *_, indices, _ = commit_phase_over_rounds(
+            self.tree,
+            rounds,
+            PicoTranscript.new(),
+            self.log_blowup,
+            PROOF_OF_WORK_BITS,
+            NUM_QUERIES,
+        )
+        # Every round's tree, committed exactly as `open` would have it.
+        per_round = [
+            self.mmcs.commit([o.lde for o in round_])[1] for round_ in rounds
+        ]
+        log_global = max(
+            o.lde.shape[0] for round_ in rounds for o in round_
+        ).bit_length() - 1
+
+        idx = np.asarray(lax.convert_element_type(indices, fnp.uint32))
+        for q, want_query in enumerate(self.golden["proof"]["query_proofs"]):
+            for r, (round_, layers, want) in enumerate(
+                zip(rounds, per_round, want_query["input_proof"])
+            ):
+                mats = [o.lde for o in round_]
+                log_round = max(m.shape[0] for m in mats).bit_length() - 1
+                reduced = int(idx[q]) >> (log_global - log_round)
+                rows, path = self.mmcs.open_batch(reduced, mats, layers)
+
+                for m, (got, w) in enumerate(zip(rows, want["opened_values"])):
+                    np.testing.assert_array_equal(
+                        np.asarray(lax.convert_element_type(got, fnp.uint32)),
+                        np.array(w),
+                        err_msg=f"query {q} round {r} matrix {m}",
+                    )
+                np.testing.assert_array_equal(
+                    np.asarray(lax.convert_element_type(path, fnp.uint32)),
+                    np.array(want["opening_proof"]),
+                    err_msg=f"query {q} round {r} path",
+                )
+
+
 if __name__ == "__main__":
     absltest.main()
