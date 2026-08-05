@@ -39,6 +39,7 @@
 pub mod gpu;
 pub mod manifest;
 pub mod pcs;
+pub mod transcript;
 pub mod proof;
 pub mod prove;
 pub mod wire;

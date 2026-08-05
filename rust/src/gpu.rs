@@ -10,7 +10,10 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use pico_zorch_golden::Val;
-use xla_pjrt::sys::PJRT_Buffer_Type_KOALABEAR_MONT as KOALABEAR_MONT;
+use xla_pjrt::sys::{
+    PJRT_Buffer_Type, PJRT_Buffer_Type_KOALABEARX4_MONT as KOALABEARX4_MONT,
+    PJRT_Buffer_Type_KOALABEAR_MONT as KOALABEAR_MONT, PJRT_Buffer_Type_S32 as S32,
+};
 
 use crate::manifest::Manifest;
 use crate::wire;
@@ -138,6 +141,90 @@ pub fn run_many_to_device(
             h2d,
             dispatch,
             readback: Duration::default(),
+            assemble: Duration::default(),
+        },
+    ))
+}
+
+/// The PJRT tag for a manifest dtype.
+///
+/// A core's inputs are not all one type — an opening takes field buffers, an
+/// extension-field point and the sponge's integer positions — so the tag comes
+/// from the manifest rather than from the call site.
+pub fn buffer_type(dtype: &str) -> Result<PJRT_Buffer_Type, String> {
+    match dtype {
+        "koalabear_mont" => Ok(KOALABEAR_MONT),
+        "koalabearx4_mont" => Ok(KOALABEARX4_MONT),
+        "int32" => Ok(S32),
+        other => Err(format!("core wants an input of unhandled dtype {other:?}")),
+    }
+}
+
+/// One argument to a core: either bytes to upload now, or data already resident.
+pub enum Arg<'a> {
+    /// Host bytes, uploaded for this call.
+    Host(&'a [u8]),
+    /// A buffer another execution left on the device.
+    Resident(&'a xla_pjrt::Buffer),
+}
+
+/// Run `core` over a mix of fresh and resident inputs, in manifest order.
+///
+/// The opening needs exactly this: its extensions are where the commit left
+/// them, while its points and transcript state are new every call.
+pub fn run_mixed(core: &Core, args: &[Arg]) -> Result<(Vec<Vec<u8>>, Phases), String> {
+    let s = gpu();
+    let m = &core.manifest;
+    if args.len() != m.inputs.len() {
+        return Err(format!(
+            "core takes {} inputs but {} were given",
+            m.inputs.len(),
+            args.len()
+        ));
+    }
+
+    let t = Instant::now();
+    // Uploaded inputs are freed after the run; resident ones belong to
+    // whoever produced them, so they are only borrowed.
+    let mut uploaded: Vec<xla_pjrt::Buffer> = Vec::new();
+    let mut slots: Vec<Option<usize>> = Vec::with_capacity(args.len());
+    for (arg, spec) in args.iter().zip(&m.inputs) {
+        match arg {
+            Arg::Host(bytes) => {
+                let dims: Vec<i64> = spec.dims.iter().map(|&n| n as i64).collect();
+                let ty = buffer_type(&spec.dtype)?;
+                uploaded.push(unsafe { s.session.input_buffer(bytes, &dims, ty) });
+                slots.push(Some(uploaded.len() - 1));
+            }
+            Arg::Resident(_) => slots.push(None),
+        }
+    }
+    let h2d = t.elapsed();
+
+    let refs: Vec<&xla_pjrt::Buffer> = args
+        .iter()
+        .zip(&slots)
+        .map(|(arg, slot)| match (arg, slot) {
+            (Arg::Resident(b), _) => *b,
+            (Arg::Host(_), Some(i)) => &uploaded[*i],
+            (Arg::Host(_), None) => unreachable!("every host arg was uploaded"),
+        })
+        .collect();
+
+    let (outs, dispatch, readback) = unsafe {
+        s.session
+            .run_buffers_timed(&core.exe, &refs, m.outputs.len())
+    };
+    uploaded
+        .into_iter()
+        .for_each(|b| unsafe { s.session.free_buffer(b) });
+
+    Ok((
+        outs,
+        Phases {
+            h2d,
+            dispatch,
+            readback,
             assemble: Duration::default(),
         },
     ))
