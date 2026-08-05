@@ -40,17 +40,17 @@ from zorch.poly.univariate import powers
 
 from zorch.coding.reed_solomon import BitReversedReedSolomon
 
-from pico_zorch.uni_stark.fri import (
-    _eval_columns,
-    _lde_code,
-    sample_query_indices,
-    to_base_field,
-)
+from zorch.pcs.fold import from_base_field, to_base_field
+
+from pico_zorch.uni_stark.fri import _eval_columns, _lde_code, sample_query_indices
 
 
 @dataclass(frozen=True)
-class Opening:
-    """One matrix's place in the batched argument."""
+class MatrixOpening:
+    """One matrix's place in the batched argument.
+
+    Not to be confused with zorch's `Opening`, which is a Merkle path; this is
+    an input to the argument, that is an output of it."""
 
     #: The committed (bit-reversed) coset LDE, `[height << log_blowup, width]`.
     lde: Array
@@ -86,7 +86,7 @@ def _inv_denominators(point: Array, height: int, log_blowup: int) -> Array:
 
 
 def reduced_openings(
-    rounds: Sequence[Sequence[Opening]],
+    rounds: Sequence[Sequence[MatrixOpening]],
     alpha: Array,
     log_blowup: int,
 ) -> dict[int, Array]:
@@ -212,7 +212,7 @@ def observe_openings(transcript, all_opened: Sequence[Sequence[Sequence[Array]]]
 
 def commit_phase_over_rounds(
     tree,
-    rounds: Sequence[Sequence[Opening]],
+    rounds: Sequence[Sequence[MatrixOpening]],
     transcript,
     log_blowup: int,
     proof_of_work_bits: int,
@@ -238,3 +238,26 @@ def commit_phase_over_rounds(
     log_max_height = max(accumulators).bit_length() - 1
     t, indices = query_indices(t, log_max_height, num_queries)
     return all_opened, final_poly, roots, layers, pow_witness, indices, t
+
+
+def commit_phase_openings(tree, layers, index: Array, log_blowup: int):
+    """One query's path through the fold chain.
+
+    Layer `i` is queried at `index >> i`; since the layer commits *pairs*, the
+    committed row is `index >> (i + 1)` and the value the verifier is missing
+    is the other half of that pair — `(index >> i) ^ 1` picks which half.
+
+    Returns `[(sibling_value, path)]`, one per layer.
+    """
+    steps = []
+    for i, (leaves, digest_layers) in enumerate(layers):
+        pair_index = index >> (i + 1)
+        opened = tree.open(leaves, digest_layers, pair_index)
+        # The row is a base-field pair of extension elements; take the half the
+        # verifier cannot recompute.
+        pair = from_base_field(opened.row[None, :], EF, 2)[0]
+        sibling = pair[((index >> i) ^ 1) % 2]
+        # Stacked, matching `MerkleTreeMmcs.open_batch`: a path is one array
+        # per level, and every consumer wants them together.
+        steps.append((sibling, fnp.stack(opened.path)))
+    return steps

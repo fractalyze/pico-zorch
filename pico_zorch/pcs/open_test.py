@@ -19,7 +19,8 @@ from zk_dtypes import koalabear_mont as F
 from zk_dtypes import koalabearx4_mont as EF
 
 from pico_zorch.pcs.open import (
-    Opening,
+    MatrixOpening,
+    commit_phase_openings,
     commit_phase_over_rounds,
     opened_values,
     reduced_openings,
@@ -62,7 +63,7 @@ class OpenedValuesTest(absltest.TestCase):
             for mat, pts in zip(rnd["matrices"], rnd["points"]):
                 trace = fnp.array(mat["values"], dtype=F)
                 openings.append(
-                    Opening(
+                    MatrixOpening(
                         lde=self.pcs.lde(trace),
                         trace=trace,
                         points=[_ext(z) for z in pts],
@@ -116,7 +117,7 @@ class ReducedOpeningsTest(absltest.TestCase):
             for mat, pts in zip(rnd["matrices"], rnd["points"]):
                 trace = fnp.array(mat["values"], dtype=F)
                 openings.append(
-                    Opening(
+                    MatrixOpening(
                         lde=self.pcs.lde(trace),
                         trace=trace,
                         points=[_ext(z) for z in pts],
@@ -215,7 +216,7 @@ class CommitPhaseTest(absltest.TestCase):
             for mat, pts in zip(rnd["matrices"], rnd["points"]):
                 trace = fnp.array(mat["values"], dtype=F)
                 openings.append(
-                    Opening(
+                    MatrixOpening(
                         lde=self.pcs.lde(trace),
                         trace=trace,
                         points=[_ext(z) for z in pts],
@@ -284,7 +285,7 @@ class InputOpeningTest(absltest.TestCase):
             for mat, pts in zip(rnd["matrices"], rnd["points"]):
                 trace = fnp.array(mat["values"], dtype=F)
                 openings.append(
-                    Opening(
+                    MatrixOpening(
                         lde=self.pcs.lde(trace),
                         trace=trace,
                         points=[_ext(z) for z in pts],
@@ -331,6 +332,38 @@ class InputOpeningTest(absltest.TestCase):
                     np.asarray(lax.convert_element_type(path, fnp.uint32)),
                     np.array(want["opening_proof"]),
                     err_msg=f"query {q} round {r} path",
+                )
+
+    def test_commit_phase_openings_match_reference(self) -> None:
+        """The fold-chain half of each query proof: the sibling the verifier
+        cannot recompute, plus its path."""
+        rounds = self._rounds()
+        _, _, _, layers, _, indices, _ = commit_phase_over_rounds(
+            self.tree,
+            rounds,
+            PicoTranscript.new(),
+            self.log_blowup,
+            PROOF_OF_WORK_BITS,
+            NUM_QUERIES,
+        )
+        idx = np.asarray(lax.convert_element_type(indices, fnp.uint32))
+        for q, want_query in enumerate(self.golden["proof"]["query_proofs"]):
+            steps = commit_phase_openings(
+                self.tree, layers, int(idx[q]), self.log_blowup
+            )
+            self.assertEqual(len(steps), len(want_query["commit_phase_openings"]))
+            for i, ((sibling, path), want) in enumerate(
+                zip(steps, want_query["commit_phase_openings"])
+            ):
+                np.testing.assert_array_equal(
+                    _u32(sibling),
+                    np.array(want["sibling_value"]["value"]),
+                    err_msg=f"query {q} layer {i} sibling",
+                )
+                np.testing.assert_array_equal(
+                    np.asarray(lax.convert_element_type(path, fnp.uint32)),
+                    np.array(want["opening_proof"]),
+                    err_msg=f"query {q} layer {i} path",
                 )
 
 
