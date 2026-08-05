@@ -81,6 +81,9 @@ py_test(
     deps = [
         ":export_pcs_open_core",
         "//pico_zorch/challenger",
+        "//pico_zorch/commit:mmcs",
+        "//pico_zorch/pcs:two_adic_fri",
+        "//pico_zorch/poseidon2:koalabear",
         requirement("absl_py"),
         requirement("frx"),
         requirement("numpy"),

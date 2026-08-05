@@ -6,19 +6,18 @@ core this is not a whole proof: `machine::prove` drives its own transcript on
 the host across four rounds, with AIR work in between, so the PCS is called as
 two stages and the transcript has to cross the boundary.
 
-    core(state, traces..., points...) -> (opened, roots, final_poly, witness,
-                                          indices, openings..., state')
+    core(state, ldes..., points...) -> (opened, roots, final_poly, witness,
+                                        indices, openings..., state')
 
 The sponge state goes in and comes back out because of that. It is five
 fixed-size arrays, so it traces like any other buffer and the host never has to
 know how the sponge works — it just carries the state between stages.
 
-**Traces, not extensions, are the input.** The opening needs each matrix's LDE,
-but re-deriving it on device costs one NTT and moves `1/blowup` as much data as
-shipping it would. That matters here specifically: the pinned `xla-pjrt` copies
-every output to host, so anything this core were handed from the commit core
-would have made a round trip first. Recomputing is strictly cheaper than
-transferring until an execution's outputs can stay resident.
+**Extensions are the input, not traces.** They are exactly what the commit core
+already produced, so with `run_buffers_to_device` (xla-pjrt#1) they pass between
+the two stages without touching the host at all. The opened values come off the
+extension's low coset, as the reference does, so the trace is not needed here
+for anything.
 
 Shape specialization: the round layout, matrix shapes and per-matrix point
 counts all trace in.
@@ -40,13 +39,11 @@ from zk_dtypes import koalabear_mont as F
 from zk_dtypes import koalabearx4_mont as EF
 
 from pico_zorch.challenger.challenger import PicoTranscript
-from pico_zorch.commit.mmcs import MerkleTreeMmcs
 from pico_zorch.pcs.open import (
     MatrixOpening,
     commit_phase_openings,
     commit_phase_over_rounds,
 )
-from pico_zorch.pcs.two_adic_fri import TwoAdicFriPcs
 from pico_zorch.poseidon2.koalabear import koalabear16_merkle
 
 ART = Path(
@@ -75,20 +72,16 @@ def parse_rounds(text: str) -> list[list[tuple[int, int, int]]]:
 
 
 def core_fn(spec, log_blowup: int, num_queries: int, proof_of_work_bits: int):
-    """The opening as one traceable function of state, traces and points."""
-    _, compressor, tree = koalabear16_merkle()
-    pcs = TwoAdicFriPcs(MerkleTreeMmcs(tree, compressor), log_blowup=log_blowup)
+    """The opening as one traceable function of state, extensions and points."""
+    _, _, tree = koalabear16_merkle()
 
-    def core(state, traces, points):
+    def core(state, ldes, points):
         rounds = []
         i = 0
         for matrices in spec:
             round_ = []
             for _ in matrices:
-                trace = traces[i]
-                round_.append(
-                    MatrixOpening(lde=pcs.lde(trace), trace=trace, points=points[i])
-                )
+                round_.append(MatrixOpening(lde=ldes[i], points=points[i]))
                 i += 1
             rounds.append(round_)
 
@@ -119,11 +112,13 @@ def main() -> None:
     fn = core_fn(spec, args.log_blowup, args.num_queries, args.proof_of_work_bits)
 
     flat = [m for round_ in spec for m in round_]
-    traces = [np.zeros((h, w), dtype=F) for h, w, _ in flat]
+    # Shapes are the *committed* ones: heights carry the blowup, matching what
+    # the commit core emits.
+    ldes = [np.zeros((h << args.log_blowup, w), dtype=F) for h, w, _ in flat]
     points = [[np.zeros((), dtype=EF)] * n for _, _, n in flat]
     state = PicoTranscript.new().state
 
-    lowered = frx.jit(fn).lower(state, traces, points)
+    lowered = frx.jit(fn).lower(state, ldes, points)
     buf = io.BytesIO()
     lowered.compiler_ir(dialect="stablehlo").operation.write_bytecode(buf)
 

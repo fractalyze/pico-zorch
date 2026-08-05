@@ -34,7 +34,7 @@ p3-uni-stark = { git = "https://github.com/brevis-network/Plonky3.git", rev = "7
 
 # Pinned: xla-pjrt is a fast-moving shared repo, so pin the rev rather than
 # tracking main (else `cargo update` can drift onto a breaking change).
-xla-pjrt = { git = "https://github.com/fractalyze/xla-pjrt", rev = "e955dc16a78af2889e262029400eba7f6a29bb6f" }
+xla-pjrt = { git = "https://github.com/fractalyze/xla-pjrt", rev = "608dba578aecf781ef82c135abcd6efebca73618" }
 
 serde = { version = "1", features = ["derive"] }
 # Manifest parsing only. The proof reassembly deliberately does NOT use JSON —

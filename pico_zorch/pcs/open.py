@@ -43,6 +43,7 @@ from zorch.coding.reed_solomon import BitReversedReedSolomon
 
 from zorch.pcs.fold import from_base_field, to_base_field
 
+from pico_zorch.pcs.two_adic_fri import GENERATOR
 from pico_zorch.uni_stark.fri import _eval_columns, _lde_code, sample_query_indices
 
 
@@ -51,27 +52,35 @@ class MatrixOpening:
     """One matrix's place in the batched argument.
 
     Not to be confused with zorch's `Opening`, which is a Merkle path; this is
-    an input to the argument, that is an output of it."""
+    an input to the argument, that is an output of it.
+
+    The extension is the only input. It is what the commit already produced and
+    what the reduction reads, so taking the trace as well would carry two
+    representations of one polynomial across the stage boundary — and the
+    opened values read off the extension's low coset, as the reference does.
+    """
 
     #: The committed (bit-reversed) coset LDE, `[height << log_blowup, width]`.
     lde: Array
-    #: The trace it extends, `[height, width]` — the opened values come from
-    #: this rather than from `lde`, which is field-identical and cheaper: both
-    #: describe the same polynomial, and the trace is the smaller one.
-    trace: Array
     #: Extension points this matrix is opened at.
     points: Sequence[Array]
 
 
-def opened_values(matrix: Array, points: Sequence[Array]) -> list[Array]:
+def opened_values(lde: Array, log_blowup: int, points: Sequence[Array]) -> list[Array]:
     """`p_i(z)` for every column i and point z — `open`'s public half.
 
-    The reference interpolates the LDE's low coset; interpolating the trace
-    gives the same polynomial and so the same values, over a domain
-    `log_blowup` times smaller.
+    Read off the extension's low coset, as the reference does: in the committed
+    bit-reversed order the first `height >> log_blowup` rows *are* the smaller
+    coset, so the split is a slice rather than a gather.
+
+    Interpolating on the plain subgroup gives the coefficients of
+    `p~(y) = p(g*y)`; evaluating at `y = z/g` recovers `p(z)`.
     """
-    coeffs = lax.ntt(matrix.T, ntt_type="INTT", ntt_length=matrix.shape[0])
-    return [_eval_columns(coeffs, z) for z in points]
+    low = lde[: lde.shape[0] >> log_blowup]
+    natural = lax.bit_reverse(low, dimensions=(0,))
+    coeffs = lax.ntt(natural.T, ntt_type="INTT", ntt_length=natural.shape[0])
+    shift = fnp.array(GENERATOR, dtype=F)
+    return [_eval_columns(coeffs, z / shift.astype(z.dtype)) for z in points]
 
 
 def _inv_denominators(point: Array, height: int, log_blowup: int) -> Array:
@@ -117,7 +126,7 @@ def reduced_openings(
         rows = (opening.lde.astype(EF) * alpha_pows[None, :]).sum(axis=-1)
 
         for point, values in zip(
-            opening.points, opened_values(opening.trace, opening.points)
+            opening.points, opened_values(opening.lde, log_blowup, opening.points)
         ):
             offset = alpha ** consumed[height]
             reduced_y = (alpha_pows * values).sum()
@@ -240,7 +249,8 @@ def commit_phase_over_rounds(
     tree.
     """
     all_opened = [
-        [opened_values(o.trace, o.points) for o in round_] for round_ in rounds
+        [opened_values(o.lde, log_blowup, o.points) for o in round_]
+        for round_ in rounds
     ]
     t = observe_openings(transcript, all_opened)
     t, alpha = t.sample_ext()

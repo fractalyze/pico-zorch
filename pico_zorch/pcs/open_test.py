@@ -64,9 +64,7 @@ class OpenedValuesTest(absltest.TestCase):
                 trace = fnp.array(mat["values"], dtype=F)
                 openings.append(
                     MatrixOpening(
-                        lde=self.pcs.lde(trace),
-                        trace=trace,
-                        points=[_ext(z) for z in pts],
+                        lde=self.pcs.lde(trace), points=[_ext(z) for z in pts]
                     )
                 )
             out.append(openings)
@@ -78,7 +76,9 @@ class OpenedValuesTest(absltest.TestCase):
         ):
             want_round = self.golden["opened_values"][r]
             for m, opening in enumerate(openings):
-                got = opened_values(opening.trace, opening.points)
+                got = opened_values(
+                    opening.lde, self.log_blowup, opening.points
+                )
                 for pt, (g, w) in enumerate(zip(got, want_round[m])):
                     np.testing.assert_array_equal(
                         _u32(g),
@@ -118,9 +118,7 @@ class ReducedOpeningsTest(absltest.TestCase):
                 trace = fnp.array(mat["values"], dtype=F)
                 openings.append(
                     MatrixOpening(
-                        lde=self.pcs.lde(trace),
-                        trace=trace,
-                        points=[_ext(z) for z in pts],
+                        lde=self.pcs.lde(trace), points=[_ext(z) for z in pts]
                     )
                 )
             out.append(openings)
@@ -156,7 +154,7 @@ class ReducedOpeningsTest(absltest.TestCase):
         # p~(y) = p(g*y), which has the same degree as p.
         natural = lax.bit_reverse(column, dimensions=(0,))
         coeffs = lax.ntt(natural, ntt_type="INTT", ntt_length=height)
-        trace_height = opening.trace.shape[0]
+        trace_height = opening.lde.shape[0] >> self.log_blowup
 
         tail = _u32(coeffs[trace_height:])
         # A blowup of 1 would leave nothing to check; fail loudly rather than
@@ -217,9 +215,7 @@ class CommitPhaseTest(absltest.TestCase):
                 trace = fnp.array(mat["values"], dtype=F)
                 openings.append(
                     MatrixOpening(
-                        lde=self.pcs.lde(trace),
-                        trace=trace,
-                        points=[_ext(z) for z in pts],
+                        lde=self.pcs.lde(trace), points=[_ext(z) for z in pts]
                     )
                 )
             out.append(openings)
@@ -286,9 +282,7 @@ class InputOpeningTest(absltest.TestCase):
                 trace = fnp.array(mat["values"], dtype=F)
                 openings.append(
                     MatrixOpening(
-                        lde=self.pcs.lde(trace),
-                        trace=trace,
-                        points=[_ext(z) for z in pts],
+                        lde=self.pcs.lde(trace), points=[_ext(z) for z in pts]
                     )
                 )
             out.append(openings)

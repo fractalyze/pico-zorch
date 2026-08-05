@@ -27,6 +27,9 @@ from zk_dtypes import koalabearx4_mont as EF
 
 from export.export_pcs_open_core import core_fn, parse_rounds
 from pico_zorch.challenger.challenger import PicoTranscript
+from pico_zorch.commit.mmcs import MerkleTreeMmcs
+from pico_zorch.pcs.two_adic_fri import TwoAdicFriPcs
+from pico_zorch.poseidon2.koalabear import koalabear16_merkle
 
 _GOLDEN = (
     pathlib.Path(__file__).parent.parent
@@ -65,12 +68,16 @@ class ExportedOpenCoreTest(absltest.TestCase):
             NUM_QUERIES,
             PROOF_OF_WORK_BITS,
         )
-        traces, points = [], []
+        _, compressor, tree = koalabear16_merkle()
+        pcs = TwoAdicFriPcs(
+            MerkleTreeMmcs(tree, compressor), log_blowup=self.golden["log_blowup"]
+        )
+        ldes, points = [], []
         for rnd in self.golden["rounds"]:
             for mat, pts in zip(rnd["matrices"], rnd["points"]):
-                traces.append(fnp.array(mat["values"], dtype=F))
+                ldes.append(pcs.lde(fnp.array(mat["values"], dtype=F)))
                 points.append([_ext(z) for z in pts])
-        return frx.jit(fn)(PicoTranscript.new().state, traces, points)
+        return frx.jit(fn)(PicoTranscript.new().state, ldes, points)
 
     def test_traced_core_matches_reference(self) -> None:
         _, roots, final_poly, witness, _, _, _ = self._run()
