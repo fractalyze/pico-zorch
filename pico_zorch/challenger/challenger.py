@@ -50,6 +50,17 @@ class PicoTranscript:
         permutation = Poseidon2(koalabear16_params())
         return cls(DuplexTranscript.new(permutation, RATE))
 
+    @classmethod
+    def from_state(cls, state: DuplexState) -> PicoTranscript:
+        """Resume a transcript from sponge state alone.
+
+        Pico's machine prover calls the PCS as separate stages with its own
+        work in between, so the transcript has to cross that boundary. The
+        state is a handful of fixed-size buffers; the permutation and rate are
+        protocol constants, so nothing else needs carrying."""
+        permutation = Poseidon2(koalabear16_params())
+        return cls(DuplexTranscript(permutation, RATE, state))
+
     @property
     def state(self) -> DuplexState:
         return self._duplex.state

@@ -28,6 +28,7 @@ Mirrors `fri/src/two_adic_pcs.rs` at brevis-network/Plonky3@7fbe1908.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Sequence
 
 import frx
@@ -133,6 +134,19 @@ def fri_input(accumulators: dict[int, Array]) -> list[Array]:
     return [accumulators[h] for h in sorted(accumulators, reverse=True)]
 
 
+@lru_cache(maxsize=None)
+def _fold_code(n: int, log_blowup: int) -> BitReversedReedSolomon:
+    """The code the fold chain steps down, cached and forced to compile time.
+
+    Constructing a coset code eagerly builds a block-length powers table; built
+    under a trace that table would be traced, and exporting the whole opening
+    is exactly the case that happens. Mirrors `_lde_code`, minus the coset
+    shift — folding works on the plain subgroup.
+    """
+    with frx.ensure_compile_time_eval():
+        return BitReversedReedSolomon(n, 1 << log_blowup, F)
+
+
 def commit_phase(tree, log_blowup: int, accumulators: dict[int, Array], transcript):
     """FRI's commit phase over inputs of *several* heights.
 
@@ -148,7 +162,7 @@ def commit_phase(tree, log_blowup: int, accumulators: dict[int, Array], transcri
     heights = sorted(accumulators, reverse=True)
     folded = accumulators[heights[0]]
     pending = {h: accumulators[h] for h in heights[1:]}
-    code = BitReversedReedSolomon(heights[0] >> log_blowup, 1 << log_blowup, F)
+    code = _fold_code(heights[0] >> log_blowup, log_blowup)
 
     t = transcript
     roots, layers = [], []

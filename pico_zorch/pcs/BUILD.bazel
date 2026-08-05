@@ -4,6 +4,8 @@ load("//:defs.bzl", "GPU_PLUGIN_DEPS")
 
 # The polynomial commitment scheme: domains, extension and committed order.
 # Binding the extended matrices to a root belongs to //pico_zorch/commit:mmcs.
+exports_files(["testdata/golden/pcs_open.json"])
+
 py_library(
     name = "two_adic_fri",
     srcs = [

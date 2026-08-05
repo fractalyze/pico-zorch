@@ -28,6 +28,7 @@ issue #8).
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Sequence
 
 import frx
@@ -42,6 +43,21 @@ from pico_zorch.commit.mmcs import MerkleTreeMmcs
 # KoalaBear's multiplicative-group generator, `Val::GENERATOR` in the
 # reference: the coset the LDE lands on, disjoint from the trace domain.
 GENERATOR = 3
+
+
+@lru_cache(maxsize=None)
+def _coset_code(n: int, log_blowup: int) -> ReedSolomon:
+    """The extension code, cached and forced to compile time.
+
+    The coset shift is a protocol constant, but materialising it with
+    `fnp.array` under an enclosing trace makes it a tracer — which is exactly
+    what happens when the whole opening is exported as one program. Building it
+    here, once, keeps the constant concrete whatever context first asks for it.
+    """
+    with frx.ensure_compile_time_eval():
+        return ReedSolomon(
+            n, 1 << log_blowup, F, coset_shift=fnp.array(GENERATOR, dtype=F)
+        )
 
 
 @dataclass(frozen=True)
@@ -61,12 +77,7 @@ class TwoAdicFriPcs:
         the layout FRI's folding indexes; the natural-order codeword is only an
         intermediate.
         """
-        code = ReedSolomon(
-            matrix.shape[0],
-            1 << self.log_blowup,
-            matrix.dtype,
-            coset_shift=fnp.array(GENERATOR, dtype=matrix.dtype),
-        )
+        code = _coset_code(matrix.shape[0], self.log_blowup)
         natural = code.extend(matrix.T)
         return lax.bit_reverse(natural, dimensions=(1,)).T
 

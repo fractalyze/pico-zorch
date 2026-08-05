@@ -16,7 +16,10 @@ this field: `PaddingFreeSponge<_, 16, 8, 8>` row leaves and
 
 from __future__ import annotations
 
+import frx
 import frx.numpy as fnp
+from functools import lru_cache
+
 import numpy as np
 
 from zk_dtypes import koalabear_mont as F
@@ -76,20 +79,31 @@ _INTERNAL_RC = [
 ]
 
 
+@lru_cache(maxsize=None)
 def koalabear16_params() -> Poseidon2Params:
+    """Pico's Poseidon2-KoalaBear-16 round constants.
+
+    Cached and forced to compile time. These are protocol constants that never
+    depend on trace data, but building them with `fnp.array` inside an
+    enclosing trace makes them tracers — and `Poseidon2Params` validates its
+    constants with numpy, so that surfaces as a conversion error a long way
+    from the cause. Exporting a stage that resumes a transcript is exactly the
+    case that hits it.
+    """
     internal_rc = np.zeros((_IR, _WIDTH), dtype=np.int64)
     internal_rc[:, 0] = np.array(_INTERNAL_RC, dtype=np.int64)
-    return Poseidon2Params(
-        width=_WIDTH,
-        dtype=F,
-        alpha=_ALPHA,
-        external_rounds=_ER,
-        internal_rounds=_IR,
-        external_constants_initial=fnp.array(_EXTERNAL_INITIAL, dtype=F),
-        external_constants_terminal=fnp.array(_EXTERNAL_TERMINAL, dtype=F),
-        internal_constants=fnp.array(internal_rc, dtype=F),
-        internal_diag=fnp.array(_INTERNAL_DIAG, dtype=F),
-    )
+    with frx.ensure_compile_time_eval():
+        return Poseidon2Params(
+            width=_WIDTH,
+            dtype=F,
+            alpha=_ALPHA,
+            external_rounds=_ER,
+            internal_rounds=_IR,
+            external_constants_initial=fnp.array(_EXTERNAL_INITIAL, dtype=F),
+            external_constants_terminal=fnp.array(_EXTERNAL_TERMINAL, dtype=F),
+            internal_constants=fnp.array(internal_rc, dtype=F),
+            internal_diag=fnp.array(_INTERNAL_DIAG, dtype=F),
+        )
 
 
 def koalabear16_perm() -> Poseidon2:
