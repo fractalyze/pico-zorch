@@ -18,12 +18,22 @@ from frx import lax
 from zk_dtypes import koalabear_mont as F
 from zk_dtypes import koalabearx4_mont as EF
 
-from pico_zorch.pcs.open import Opening, opened_values, reduced_openings
+from pico_zorch.pcs.open import (
+    Opening,
+    commit_phase_over_rounds,
+    opened_values,
+    reduced_openings,
+)
 from pico_zorch.pcs.two_adic_fri import TwoAdicFriPcs
+from pico_zorch.challenger.challenger import PicoTranscript
 from pico_zorch.commit.mmcs import MerkleTreeMmcs
 from pico_zorch.poseidon2.koalabear import koalabear16_merkle
 
 _GOLDEN = pathlib.Path(__file__).parent / "testdata" / "golden" / "pcs_open.json"
+
+# Pico's FRI parameters, the same ones `golden` was built with.
+NUM_QUERIES = 84
+PROOF_OF_WORK_BITS = 16
 
 
 def _u32(x) -> np.ndarray:
@@ -176,6 +186,77 @@ class ReducedOpeningsTest(absltest.TestCase):
         )
         self.assertTrue(differs, "matrix order must affect the reduction")
 
+
+
+class CommitPhaseTest(absltest.TestCase):
+    """The commit phase, grind and query sampling, against the reference proof.
+
+    Anything wrong upstream — a mis-ordered alpha run, a wrong reduction, an
+    accumulator mixed in at the wrong height, an observation out of order —
+    lands here as a differing root, so these three fields cover the whole
+    argument up to the input openings.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        super().setUpClass()
+        cls.golden = json.loads(_GOLDEN.read_text())
+        cls.log_blowup = cls.golden["log_blowup"]
+        _, compressor, tree = koalabear16_merkle()
+        cls.tree = tree
+        cls.pcs = TwoAdicFriPcs(
+            MerkleTreeMmcs(tree, compressor), log_blowup=cls.log_blowup
+        )
+
+    def _rounds(self):
+        out = []
+        for rnd in self.golden["rounds"]:
+            openings = []
+            for mat, pts in zip(rnd["matrices"], rnd["points"]):
+                trace = fnp.array(mat["values"], dtype=F)
+                openings.append(
+                    Opening(
+                        lde=self.pcs.lde(trace),
+                        trace=trace,
+                        points=[_ext(z) for z in pts],
+                    )
+                )
+            out.append(openings)
+        return out
+
+    def _run(self):
+        return commit_phase_over_rounds(
+            self.tree,
+            self._rounds(),
+            PicoTranscript.new(),
+            self.log_blowup,
+            PROOF_OF_WORK_BITS,
+            NUM_QUERIES,
+        )
+
+    def test_commit_phase_roots_match_reference(self) -> None:
+        _, _, roots, _, _, _, _ = self._run()
+        want = self.golden["proof"]["commit_phase_commits"]
+        self.assertEqual(len(roots), len(want))
+        for i, (got, w) in enumerate(zip(roots, want)):
+            np.testing.assert_array_equal(
+                np.asarray(lax.convert_element_type(got, fnp.uint32)),
+                np.array(w["value"]),
+                err_msg=f"commit phase layer {i}",
+            )
+
+    def test_final_poly_matches_reference(self) -> None:
+        _, final_poly, _, _, _, _, _ = self._run()
+        np.testing.assert_array_equal(
+            _u32(final_poly), np.array(self.golden["proof"]["final_poly"]["value"])
+        )
+
+    def test_pow_witness_matches_reference(self) -> None:
+        _, _, _, _, pow_witness, _, _ = self._run()
+        self.assertEqual(
+            int(np.asarray(lax.convert_element_type(pow_witness, fnp.uint32))),
+            self.golden["proof"]["pow_witness"],
+        )
 
 if __name__ == "__main__":
     absltest.main()

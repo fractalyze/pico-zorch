@@ -38,7 +38,14 @@ from zk_dtypes import koalabearx4_mont as EF
 
 from zorch.poly.univariate import powers
 
-from pico_zorch.uni_stark.fri import _eval_columns, _lde_code
+from zorch.coding.reed_solomon import BitReversedReedSolomon
+
+from pico_zorch.uni_stark.fri import (
+    _eval_columns,
+    _lde_code,
+    sample_query_indices,
+    to_base_field,
+)
 
 
 @dataclass(frozen=True)
@@ -124,3 +131,110 @@ def reduced_openings(
 def fri_input(accumulators: dict[int, Array]) -> list[Array]:
     """The accumulators tallest-first, which is the order FRI folds in."""
     return [accumulators[h] for h in sorted(accumulators, reverse=True)]
+
+
+def commit_phase(tree, log_blowup: int, accumulators: dict[int, Array], transcript):
+    """FRI's commit phase over inputs of *several* heights.
+
+    Folding halves the codeword each round, so an accumulator shorter than the
+    tallest has no rows to contribute until the fold has come down to its
+    height — at which point it is added in elementwise. Structurally the same
+    idea as the MMCS's injection, and for the same reason: one argument has to
+    bind polynomials that live on different domains.
+
+    The layer count follows the codeword shape rather than any value, so the
+    loop unrolls at trace time and the whole phase is one dispatch.
+    """
+    heights = sorted(accumulators, reverse=True)
+    folded = accumulators[heights[0]]
+    pending = {h: accumulators[h] for h in heights[1:]}
+    code = BitReversedReedSolomon(heights[0] >> log_blowup, 1 << log_blowup, F)
+
+    t = transcript
+    roots, layers = [], []
+    while folded.shape[0] > (1 << log_blowup):
+        leaves = to_base_field(code.pair_leaves(folded))
+        root, digest_layers = tree.commit(leaves)
+        t = t.observe(root)
+        t, beta = t.sample_ext()
+        folded = code.fold(folded, beta)
+        mix = pending.pop(folded.shape[0], None)
+        if mix is not None:
+            folded = folded + mix
+        roots.append(root)
+        layers.append((leaves, tuple(digest_layers)))
+
+    if pending:
+        # Only reachable if an accumulator is taller than the tallest input,
+        # which the sort rules out, or if a height is not a power of two.
+        raise AssertionError(f"accumulators never mixed in: {sorted(pending)}")
+
+    final_poly = folded[0]
+    t = t.observe(final_poly)
+    return final_poly, tuple(roots), tuple(layers), t
+
+
+def query_indices(transcript, log_max_height: int, num_queries: int):
+    """Query positions, sampled against the *tallest* committed height.
+
+    Every round is queried at the same position folded down to its own height,
+    so the sampling width is the global maximum rather than any one round's.
+    """
+    return sample_query_indices(transcript, log_max_height, num_queries)
+
+
+def round_index(index: Array, log_max_height: int, log_round_height: int) -> Array:
+    """A global query position mapped into one round's shorter codeword.
+
+    `index >> (log_global_max - log_round_max)`: the reference's
+    `bits_reduced`. Correct only because the committed order is bit-reversed,
+    which puts a codeword's positions in the same prefix relationship its
+    domain has.
+    """
+    if log_round_height > log_max_height:
+        raise ValueError(
+            f"round height 2^{log_round_height} exceeds the global maximum "
+            f"2^{log_max_height}"
+        )
+    return index >> (log_max_height - log_round_height)
+
+
+def observe_openings(transcript, all_opened: Sequence[Sequence[Sequence[Array]]]):
+    """Observe every opened value, in round -> matrix -> point -> column order.
+
+    The reference observes each `y` individually before sampling alpha, so
+    alpha depends on all of them; a consumer that observed a different order
+    would derive a different alpha and diverge from there on.
+    """
+    flat = [v for round_ in all_opened for mat in round_ for v in mat]
+    return transcript.observe(fnp.concatenate(flat))
+
+
+def commit_phase_over_rounds(
+    tree,
+    rounds: Sequence[Sequence[Opening]],
+    transcript,
+    log_blowup: int,
+    proof_of_work_bits: int,
+    num_queries: int,
+):
+    """Everything in `open` from the opened values through the query indices.
+
+    Returns `(all_opened, final_poly, roots, layers, pow_witness, indices, t)`.
+    The per-round input openings are not here: those read the MMCS's
+    mixed-height prover data, which opens differently from a single-matrix
+    tree.
+    """
+    all_opened = [
+        [opened_values(o.trace, o.points) for o in round_] for round_ in rounds
+    ]
+    t = observe_openings(transcript, all_opened)
+    t, alpha = t.sample_ext()
+
+    accumulators = reduced_openings(rounds, alpha, log_blowup)
+    final_poly, roots, layers, t = commit_phase(tree, log_blowup, accumulators, t)
+
+    t, pow_witness = t.grind(proof_of_work_bits)
+    log_max_height = max(accumulators).bit_length() - 1
+    t, indices = query_indices(t, log_max_height, num_queries)
+    return all_opened, final_poly, roots, layers, pow_witness, indices, t

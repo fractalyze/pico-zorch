@@ -15,6 +15,7 @@ py_library(
     deps = [
         "//pico_zorch",
         "//pico_zorch/commit:mmcs",
+        "//pico_zorch/challenger",
         "//pico_zorch/uni_stark:fri",
         "@zorch//zorch/coding:reed_solomon",
         "@zorch//zorch/poly",
@@ -29,6 +30,7 @@ py_test(
     data = ["//pico_zorch/commit:testdata/golden/batch_commit.json"],
     deps = [
         ":two_adic_fri",
+        "//pico_zorch/challenger",
         "//pico_zorch/commit:mmcs",
         "//pico_zorch/poseidon2:koalabear",
         requirement("absl_py"),
@@ -44,6 +46,7 @@ py_test(
     data = ["testdata/golden/pcs_open.json"],
     deps = [
         ":two_adic_fri",
+        "//pico_zorch/challenger",
         "//pico_zorch/commit:mmcs",
         "//pico_zorch/poseidon2:koalabear",
         requirement("absl_py"),
