@@ -32,10 +32,15 @@ use p3_matrix::bitrev::BitReversableMatrix;
 use p3_matrix::dense::RowMajorMatrix;
 use p3_dft::TwoAdicSubgroupDft;
 use p3_matrix::Matrix;
-use pico_zorch_golden::{Challenge, Challenger, Dft, MyPcs, Val, ValMmcs, LOG_BLOWUP};
+use p3_field::FieldExtensionAlgebra;
+use pico_zorch_golden::{
+    Challenge, Challenger, Dft, MyPcs, Val, ValMmcs, LOG_BLOWUP, NUM_QUERIES,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::gpu::{self, Core};
+use crate::opening::{self, OpenShape};
+use crate::transcript;
 use crate::wire;
 
 /// Digest width of Pico's Merkle commitments.
@@ -107,6 +112,18 @@ impl TwoAdicFriPcs {
     /// differently-shaped executable, not a differently-configured one.
     fn log_blowup(&self) -> usize {
         LOG_BLOWUP
+    }
+
+    /// Fold layers the argument implies: one per halving from the tallest
+    /// committed height down to the blowup.
+    fn fold_layers(&self, rounds: &[(&CommittedData, Vec<Vec<Challenge>>)]) -> usize {
+        let tallest = rounds
+            .iter()
+            .flat_map(|(data, _)| data.matrices.iter())
+            .map(|m| (m.values.len() / m.width) << self.log_blowup())
+            .max()
+            .expect("an opening has at least one matrix");
+        tallest.trailing_zeros() as usize - self.log_blowup()
     }
 
     /// The commitment, the one output `commit` reads back.
@@ -216,29 +233,71 @@ impl Pcs<Challenge, Challenger> for TwoAdicFriPcs {
         rounds: Vec<(&Self::ProverData, Vec<Vec<Challenge>>)>,
         challenger: &mut Challenger,
     ) -> (p3_commit::OpenedValues<Challenge>, Self::Proof) {
-        let _ = (rounds, challenger, self.open_core);
-        // Not wired yet, and the remaining work is host-side plumbing rather
-        // than protocol:
-        //
-        //  - decode the core's 29 outputs into `OpenedValues` and `FriProof`.
-        //    Every field of both is `pub`, so this is direct construction, not
-        //    another serde hop. The shape is fixed by the manifest: opened
-        //    values flatten round -> matrix -> point, the query openings carry
-        //    a leading query axis, and the fold-layer paths are ragged because
-        //    each layer's tree is shorter than the last.
-        //  - hand the extensions in as arguments, resolving each round's
-        //    device handle and re-uploading the ones that no longer resolve.
-        //
-        // Everything under it is done and verified: the core byte-matches the
-        // reference (`//pico_zorch/pcs:open_test`), the challenger crosses the
-        // boundary intact (`transcript::tests`), and `gpu::run_mixed` takes
-        // the mix of resident and fresh inputs this needs.
-        //
-        // Until then a caller wanting a full proof should use the reference
-        // PCS; this type still moves the commit to the device.
-        unimplemented!(
-            "Pcs::open is not wired to the exported core yet — see the comment above"
-        )
+        let shape = OpenShape {
+            rounds: rounds
+                .iter()
+                .map(|(data, points)| {
+                    data.matrices
+                        .iter()
+                        .zip(points)
+                        .map(|(m, pts)| (m.width, pts.len()))
+                        .collect()
+                })
+                .collect(),
+            layers: self.fold_layers(&rounds),
+            queries: NUM_QUERIES,
+        };
+
+        let state = transcript::to_state(challenger);
+        // Extensions the commit left on the device, or rebuilt if a handle no
+        // longer resolves — a different thread, or a serde round trip.
+        let fallback: Vec<Vec<u8>> = rounds
+            .iter()
+            .filter(|(data, _)| data.device.and_then(gpu::resident).is_none())
+            .flat_map(|(data, _)| {
+                data.ldes(self.log_blowup())
+                    .iter()
+                    .map(|m| wire::as_bytes(&m.values).to_vec())
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        let point_bytes: Vec<Vec<u8>> = rounds
+            .iter()
+            .flat_map(|(_, points)| points.iter().flatten())
+            .map(|z| wire::as_bytes(z.as_base_slice()).to_vec())
+            .collect();
+
+        let mut args: Vec<gpu::Arg> =
+            state.args().iter().map(|b| gpu::Arg::Host(b)).collect();
+        let mut spare = fallback.iter();
+        for (data, _) in &rounds {
+            match data.device.and_then(gpu::resident) {
+                // The commit core emits the root first, then one extension per
+                // matrix, then the digest layers; only the extensions are
+                // arguments here.
+                Some(kept) => {
+                    for i in 0..data.matrices.len() {
+                        args.push(gpu::Arg::Resident(&kept.buffers[1 + i]));
+                    }
+                }
+                None => {
+                    for _ in 0..data.matrices.len() {
+                        args.push(gpu::Arg::Host(
+                            spare.next().expect("one fallback per matrix"),
+                        ));
+                    }
+                }
+            }
+        }
+        for bytes in &point_bytes {
+            args.push(gpu::Arg::Host(bytes));
+        }
+
+        let (raw, _) = gpu::run_mixed(self.open_core, &args).expect("run the open core");
+        let (opened, proof, next) =
+            opening::decode(&shape, &raw).expect("decode the opening");
+        transcript::from_state(challenger, &next).expect("restore the challenger");
+        (opened, proof)
     }
 
     fn verify(

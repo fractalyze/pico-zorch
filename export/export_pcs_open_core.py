@@ -138,7 +138,11 @@ def main() -> None:
     out_avals, out_tree = frx.tree_util.tree_flatten(frx.eval_shape(fn, state, ldes, points))
     in_avals, _ = frx.tree_util.tree_flatten((state, ldes, points))
 
-    lowered = frx.jit(fn).lower(state, ldes, points)
+    # `keep_unused` so the executable's parameters are exactly the manifest's.
+    # By default an argument that does not reach an output is pruned from the
+    # compiled program but stays in the traced signature, and the two silently
+    # disagree — the caller then supplies more buffers than the program takes.
+    lowered = frx.jit(fn, keep_unused=True).lower(state, ldes, points)
     buf = io.BytesIO()
     lowered.compiler_ir(dialect="stablehlo").operation.write_bytecode(buf)
 
