@@ -8,13 +8,14 @@ numpy
 # frx = Field, Ring Accelerated. Pins track zorch's requirements.in
 # at the MODULE.bazel git_override commit — they build against a shared frxlib,
 # so a lagging pin ABI-mismatches and segfaults the GPU tests.
-frx==0.10.1.dev20260803000037
-frxlib==0.10.1.dev20260803000037
-frx-cuda12-pjrt==0.10.1.dev20260803000037
+frx==0.10.1.dev20260811100738
+frxlib==0.10.1.dev20260811100738
+frx-cuda12-pjrt==0.10.1.dev20260811100738
 # `[with-cuda]` pulls the CUDA 12 userspace (cublas, cudart, cudnn, nccl, ...)
 # in as wheels. Without it the plugin .so resolves but finds no CUDA runtime,
 # `cudaRuntimeGetVersion` fails, and frx falls back to CPU with only a warning
 # — a GPU leg that silently measures the CPU backend. The wheels also keep the
 # CUDA version pinned to the plugin rather than to whatever the host installed.
-frx-cuda12-plugin[with-cuda]==0.10.1.dev20260803000037
+frx-cuda12-plugin[with-cuda]==0.10.1.dev20260811100738
 zk-dtypes==0.0.10
+hash-frx==0.1.0.dev20260810004122
