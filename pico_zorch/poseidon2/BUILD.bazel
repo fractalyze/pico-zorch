@@ -13,10 +13,8 @@ py_library(
     deps = [
         "//pico_zorch",
         "@zorch//zorch/commit:merkle",
-        "@zorch//zorch/hash:compression",
-        "@zorch//zorch/hash:sponge",
-        "@zorch//zorch/hash/poseidon2",
         requirement("frx"),
+        requirement("hash_frx"),
         requirement("numpy"),
         requirement("zk_dtypes"),
     ],

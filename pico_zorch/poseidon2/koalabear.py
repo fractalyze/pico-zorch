@@ -20,11 +20,11 @@ import frx.numpy as fnp
 import numpy as np
 
 from zk_dtypes import koalabear_mont as F
+from hash_frx.compression import Compression, CompressionParams
+from hash_frx.poseidon2.params import Poseidon2Params
+from hash_frx.poseidon2.poseidon2 import Poseidon2
+from hash_frx.sponge import Sponge, SpongeParams
 from zorch.commit.merkle import MerkleTree
-from zorch.hash.compression import Compression, CompressionParams
-from zorch.hash.poseidon2.params import Poseidon2Params
-from zorch.hash.poseidon2.poseidon2 import Poseidon2
-from zorch.hash.sponge import Sponge, SpongeParams
 
 # _ER counts one external half (4 initial + 4 terminal full rounds).
 _WIDTH, _ER, _IR, _ALPHA = 16, 4, 20, 3

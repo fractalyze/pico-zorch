@@ -15,8 +15,8 @@ py_library(
         "//pico_zorch/poseidon2:koalabear",
         "@zorch//zorch:challenge",
         "@zorch//zorch:transcript",
-        "@zorch//zorch/hash/poseidon2",
         requirement("frx"),
+        requirement("hash_frx"),
         requirement("zk_dtypes"),
     ],
 )

@@ -20,8 +20,8 @@ from frx.tree_util import register_dataclass
 from zk_dtypes import koalabear_mont as F
 from zk_dtypes import koalabearx4_mont as EF
 
+from hash_frx.poseidon2.poseidon2 import Poseidon2
 from zorch.challenge import ChallengePolicy
-from zorch.hash.poseidon2.poseidon2 import Poseidon2
 from zorch.transcript import DuplexState, DuplexTranscript
 
 from pico_zorch.poseidon2.koalabear import koalabear16_params
