@@ -60,7 +60,10 @@ class PicoTranscript:
 
     @property
     def has_dedicated_fusion(self) -> bool:
-        return self._duplex.has_dedicated_fusion
+        # hash-frx#170 retired its `has_dedicated_fusion` bool for the
+        # `FusionPath` enum; `is_one_kernel` is its documented successor.
+        # Pico keeps the boolean facade its callers already read.
+        return self._duplex.fusion_path.is_one_kernel
 
     def observe(self, values: Array) -> PicoTranscript:
         return PicoTranscript(self._duplex.observe(values))
